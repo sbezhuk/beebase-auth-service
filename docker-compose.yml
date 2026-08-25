@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-beebase}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-beebase}
+      POSTGRES_DB: ${POSTGRES_DB:-beebase}
+    ports:
+      - "5432:5432"
+    volumes:
+      - beebase_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-beebase} -d ${POSTGRES_DB:-beebase}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Overrides .env's localhost DSN: within the compose network the
+      # database is reachable at the service name "postgres", not localhost.
+      DATABASE_URL: postgres://${POSTGRES_USER:-beebase}:${POSTGRES_PASSWORD:-beebase}@postgres:5432/${POSTGRES_DB:-beebase}?sslmode=disable
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  beebase_postgres_data:
