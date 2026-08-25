@@ -11,10 +11,16 @@ import (
 
 	"github.com/joho/godotenv"
 
+	appauth "github.com/sbezhuk/BeeBase-Server/internal/application/auth"
 	"github.com/sbezhuk/BeeBase-Server/internal/config"
+	"github.com/sbezhuk/BeeBase-Server/internal/platform/jwtauth"
 	"github.com/sbezhuk/BeeBase-Server/internal/platform/logger"
+	"github.com/sbezhuk/BeeBase-Server/internal/platform/password"
 	"github.com/sbezhuk/BeeBase-Server/internal/platform/postgres"
+	repopostgres "github.com/sbezhuk/BeeBase-Server/internal/repository/postgres"
 	"github.com/sbezhuk/BeeBase-Server/internal/server"
+	authhttp "github.com/sbezhuk/BeeBase-Server/internal/transport/http/auth"
+
 	transporthttp "github.com/sbezhuk/BeeBase-Server/internal/transport/http"
 )
 
@@ -50,7 +56,15 @@ func run() error {
 
 	log.Info("connected to database")
 
-	router := transporthttp.NewRouter(log, db)
+	userRepo := repopostgres.NewUserRepository(db)
+	refreshTokenRepo := repopostgres.NewRefreshTokenRepository(db)
+	hasher := password.NewBcryptHasher(0)
+	tokenIssuer := jwtauth.NewIssuer(cfg.JWTSecret, cfg.AccessTokenTTL)
+
+	authService := appauth.NewService(userRepo, refreshTokenRepo, hasher, tokenIssuer, cfg.RefreshTokenTTL)
+	authHandler := authhttp.NewHandler(authService, log)
+
+	router := transporthttp.NewRouter(log, db, authHandler, tokenIssuer)
 
 	srv := server.New(server.Config{
 		Addr:         ":" + cfg.HTTPPort,

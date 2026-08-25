@@ -16,6 +16,21 @@ services:
       timeout: 5s
       retries: 10
 
+  # One-shot job: applies pending migrations, then exits. Kept separate
+  # from the app so migrations run exactly once per `docker compose up`,
+  # not once per horizontally-scaled app replica.
+  migrate:
+    image: migrate/migrate:v4.19.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations:ro
+    command:
+      - -path=/migrations
+      - -database=postgres://${POSTGRES_USER:-beebase}:${POSTGRES_PASSWORD:-beebase}@postgres:5432/${POSTGRES_DB:-beebase}?sslmode=disable
+      - up
+
   app:
     build:
       context: .
@@ -32,6 +47,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   beebase_postgres_data:

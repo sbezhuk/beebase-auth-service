@@ -1,0 +1,275 @@
+openapi: 3.0.3
+info:
+  title: BeeBase API
+  description: Open-source backend for a beekeeper management application.
+  version: 0.2.0
+servers:
+  - url: http://localhost:8080
+
+tags:
+  - name: system
+    description: Liveness and readiness probes.
+  - name: auth
+    description: Registration, login, session refresh, logout, and the current user.
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Liveness probe
+      description: Always returns 200 while the process is running. Has no dependencies.
+      responses:
+        "200":
+          description: The process is alive.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /ready:
+    get:
+      tags: [system]
+      summary: Readiness probe
+      description: Returns 200 only if the database is reachable.
+      responses:
+        "200":
+          description: The service is ready to receive traffic.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+        "503":
+          description: A dependency (the database) is unreachable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /api/v1/auth/register:
+    post:
+      tags: [auth]
+      summary: Register a new account
+      description: >
+        Creates a user and returns an established session, so a client can
+        register and immediately act as that user without a separate login.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+      responses:
+        "201":
+          description: Account created; session established.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "400":
+          description: Request failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "409":
+          description: An account with this email already exists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Log in with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Session established.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "400":
+          description: Request failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: >
+            Invalid email or password. Deliberately not distinguished, so a
+            login attempt can't be used to enumerate registered emails.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate a refresh token for a new access/refresh pair
+      description: >
+        The presented refresh token is revoked and a new pair is issued
+        (rotation). Presenting a token that was already revoked is treated
+        as evidence of theft: every refresh token belonging to that user is
+        revoked, ending the whole session family.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshRequest" }
+      responses:
+        "200":
+          description: New session issued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "400":
+          description: Request failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: The refresh token is unknown, expired, or already revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke a refresh token
+      description: >
+        Idempotent: revoking an already-revoked or unknown token still
+        returns 204, since the desired end state already holds.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshRequest" }
+      responses:
+        "204":
+          description: The token is revoked (or already was).
+        "400":
+          description: Request failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+
+  /api/v1/auth/me:
+    get:
+      tags: [auth]
+      summary: Get the current authenticated user
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The authenticated user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserResponse" }
+        "401":
+          description: >
+            No Authorization header (code missing_authorization), or an
+            invalid/expired access token (code invalid_access_token).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    StatusResponse:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+
+    UserResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        created_at: { type: string, format: date-time }
+
+    SessionResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: >-
+            Short-lived JWT. Send as "Authorization: Bearer <token>".
+        access_token_expires_at: { type: string, format: date-time }
+        refresh_token:
+          type: string
+          description: >-
+            Opaque, single-use token. Store it and send it only to
+            /auth/refresh or /auth/logout.
+        user: { $ref: "#/components/schemas/UserResponse" }
+
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: { type: string }
+
+    ErrorResponse:
+      type: object
+      description: >
+        "code" is the stable, machine-readable key: build any localized
+        message off of it, not off "message" (an English fallback for logs
+        and manual debugging, not meant to be shown to end users).
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: One of a fixed set of error codes returned by this API.
+              enum:
+                - email_taken
+                - user_not_found
+                - invalid_credentials
+                - invalid_refresh_token
+                - missing_authorization
+                - invalid_access_token
+                - invalid_body
+                - internal_error
+              example: invalid_credentials
+            message: { type: string, example: invalid email or password }
+
+    ValidationErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, enum: [validation_error] }
+            message: { type: string, example: request validation failed }
+            fields:
+              type: object
+              description: >
+                Field name to error code. Each value is a stable key (not a
+                human-readable message) meant to be localized client-side.
+              additionalProperties:
+                type: string
+                enum:
+                  - email_required
+                  - email_invalid
+                  - password_required
+                  - password_too_short
+                  - refresh_token_required
+              example: { email: "email_invalid" }

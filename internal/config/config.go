@@ -22,6 +22,10 @@ type Config struct {
 	DatabaseConnectTimeout time.Duration
 
 	LogLevel string // "debug", "info", "warn", "error"
+
+	JWTSecret       string
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
 }
 
 // Load builds a Config from environment variables, falling back to
@@ -40,10 +44,17 @@ func Load() (*Config, error) {
 		DatabaseConnectTimeout: getDuration("DATABASE_CONNECT_TIMEOUT", 5*time.Second),
 
 		LogLevel: getEnv("LOG_LEVEL", "info"),
+
+		JWTSecret:       getEnv("JWT_SECRET", ""),
+		AccessTokenTTL:  getDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTokenTTL: getDuration("REFRESH_TOKEN_TTL", 720*time.Hour),
 	}
 
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("config: DATABASE_URL is required")
+	}
+	if cfg.JWTSecret == "" {
+		return nil, fmt.Errorf("config: JWT_SECRET is required")
 	}
 
 	return cfg, nil

@@ -2,11 +2,12 @@ package http
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/sbezhuk/BeeBase-Server/internal/transport/http/httpx"
 )
 
 type statusResponse struct {
@@ -17,7 +18,7 @@ type statusResponse struct {
 // It has no external dependencies and should never fail while the process
 // is running, which is what makes it suitable for a container liveness probe.
 func HealthHandler(w http.ResponseWriter, r *http.Request) {
-	writeStatus(w, http.StatusOK, "ok")
+	httpx.WriteJSON(w, http.StatusOK, statusResponse{Status: "ok"})
 }
 
 // ReadyHandler reports readiness: the process is up and able to serve
@@ -29,16 +30,10 @@ func ReadyHandler(db *pgxpool.Pool) http.HandlerFunc {
 		defer cancel()
 
 		if err := db.Ping(ctx); err != nil {
-			writeStatus(w, http.StatusServiceUnavailable, "unavailable")
+			httpx.WriteJSON(w, http.StatusServiceUnavailable, statusResponse{Status: "unavailable"})
 			return
 		}
 
-		writeStatus(w, http.StatusOK, "ok")
+		httpx.WriteJSON(w, http.StatusOK, statusResponse{Status: "ok"})
 	}
-}
-
-func writeStatus(w http.ResponseWriter, code int, status string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(statusResponse{Status: status})
 }
