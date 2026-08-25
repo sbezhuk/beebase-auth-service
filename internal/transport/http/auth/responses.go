@@ -5,8 +5,8 @@ import (
 
 	"github.com/google/uuid"
 
-	appauth "github.com/sbezhuk/BeeBase-Server/internal/application/auth"
-	"github.com/sbezhuk/BeeBase-Server/internal/domain/user"
+	appauth "github.com/sbezhuk/beebase-auth-service/internal/application/auth"
+	"github.com/sbezhuk/beebase-auth-service/internal/domain/user"
 )
 
 // SessionResponse is returned by register, login, and refresh: it carries

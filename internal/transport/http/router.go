@@ -11,8 +11,8 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	authhttp "github.com/sbezhuk/BeeBase-Server/internal/transport/http/auth"
-	httpmw "github.com/sbezhuk/BeeBase-Server/internal/transport/http/middleware"
+	authhttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http/auth"
+	httpmw "github.com/sbezhuk/beebase-common/authmw"
 )
 
 // NewRouter builds the root HTTP handler for the application.
@@ -21,6 +21,7 @@ func NewRouter(
 	db *pgxpool.Pool,
 	authHandler *authhttp.Handler,
 	tokenParser httpmw.AccessTokenParser,
+	jwksHandler http.HandlerFunc,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -31,6 +32,10 @@ func NewRouter(
 
 	r.Get("/health", HealthHandler)
 	r.Get("/ready", ReadyHandler(db))
+
+	// Lets other services fetch this service's public key to verify the
+	// access tokens it issues, without ever needing the private key itself.
+	r.Get("/.well-known/jwks.json", jwksHandler)
 
 	r.Route("/api/v1/auth", func(r chi.Router) {
 		r.Post("/register", authHandler.Register)

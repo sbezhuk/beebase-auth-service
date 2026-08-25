@@ -7,7 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/sbezhuk/BeeBase-Server/internal/transport/http/httpx"
+	"github.com/sbezhuk/beebase-common/httpx"
 )
 
 type statusResponse struct {

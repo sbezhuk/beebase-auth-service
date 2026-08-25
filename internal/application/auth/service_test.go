@@ -2,6 +2,7 @@ package auth_test
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"sync"
 	"testing"
@@ -10,12 +11,24 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
-	appauth "github.com/sbezhuk/BeeBase-Server/internal/application/auth"
-	"github.com/sbezhuk/BeeBase-Server/internal/domain/token"
-	"github.com/sbezhuk/BeeBase-Server/internal/domain/user"
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/jwtauth"
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/password"
+	appauth "github.com/sbezhuk/beebase-auth-service/internal/application/auth"
+	"github.com/sbezhuk/beebase-auth-service/internal/domain/token"
+	"github.com/sbezhuk/beebase-auth-service/internal/domain/user"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/jwtauth"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/password"
 )
+
+// newTestIssuer builds an Issuer with a freshly generated key. Key
+// generation only fails if crypto/rand itself is broken, which would make
+// every other test in this process meaningless too, so this panics rather
+// than threading a *testing.T through every call site.
+func newTestIssuer(ttl time.Duration) *jwtauth.Issuer {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		panic(err)
+	}
+	return jwtauth.NewIssuer(priv, jwtauth.KeyID(pub), ttl)
+}
 
 // --- in-memory fakes for the domain ports ---
 
@@ -131,7 +144,7 @@ func newTestService() (*appauth.Service, *fakeUserRepo, *fakeTokenRepo) {
 	users := newFakeUserRepo()
 	tokens := newFakeTokenRepo()
 	hasher := password.NewBcryptHasher(bcrypt.MinCost)
-	issuer := jwtauth.NewIssuer("test-secret", time.Minute)
+	issuer := newTestIssuer(time.Minute)
 
 	svc := appauth.NewService(users, tokens, hasher, issuer, time.Hour)
 	return svc, users, tokens
@@ -284,7 +297,7 @@ func TestRefresh_ExpiredToken(t *testing.T) {
 	users := newFakeUserRepo()
 	tokens := newFakeTokenRepo()
 	hasher := password.NewBcryptHasher(bcrypt.MinCost)
-	issuer := jwtauth.NewIssuer("test-secret", time.Minute)
+	issuer := newTestIssuer(time.Minute)
 
 	// Negative TTL: any refresh token issued by this service is already expired.
 	svc := appauth.NewService(users, tokens, hasher, issuer, -time.Hour)

@@ -1,4 +1,4 @@
-.PHONY: run build fmt vet test test-integration lint tidy \
+.PHONY: run build fmt vet test test-integration lint tidy keygen \
 	migrate-up migrate-down migrate-new migrate-install \
 	docker-up docker-down docker-build docker-logs
 
@@ -29,6 +29,9 @@ lint: ## Run golangci-lint, if installed.
 
 tidy: ## Sync go.mod/go.sum with imports.
 	go mod tidy
+
+keygen: ## Generate a new Ed25519 key pair for JWT_PRIVATE_KEY.
+	go run ./cmd/keygen
 
 migrate-up: ## Apply all pending migrations to DATABASE_URL. Requires golang-migrate (make migrate-install).
 	migrate -path $(MIGRATIONS_DIR) -database "$(DATABASE_URL)" up

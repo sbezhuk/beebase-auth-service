@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sbezhuk/BeeBase-Server/internal/domain/token"
-	"github.com/sbezhuk/BeeBase-Server/internal/domain/user"
-	repopostgres "github.com/sbezhuk/BeeBase-Server/internal/repository/postgres"
+	"github.com/sbezhuk/beebase-auth-service/internal/domain/token"
+	"github.com/sbezhuk/beebase-auth-service/internal/domain/user"
+	repopostgres "github.com/sbezhuk/beebase-auth-service/internal/repository/postgres"
 )
 
 // seedUser inserts a user directly (via the same repository under test)

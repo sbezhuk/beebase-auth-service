@@ -1,8 +1,9 @@
-// Command server is the entry point for the BeeBase backend.
+// Command server is the entry point for the BeeBase auth-service.
 package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,17 +12,20 @@ import (
 
 	"github.com/joho/godotenv"
 
-	appauth "github.com/sbezhuk/BeeBase-Server/internal/application/auth"
-	"github.com/sbezhuk/BeeBase-Server/internal/config"
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/jwtauth"
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/logger"
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/password"
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/postgres"
-	repopostgres "github.com/sbezhuk/BeeBase-Server/internal/repository/postgres"
-	"github.com/sbezhuk/BeeBase-Server/internal/server"
-	authhttp "github.com/sbezhuk/BeeBase-Server/internal/transport/http/auth"
+	appauth "github.com/sbezhuk/beebase-auth-service/internal/application/auth"
+	"github.com/sbezhuk/beebase-auth-service/internal/config"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/jwtauth"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/password"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/postgres"
+	repopostgres "github.com/sbezhuk/beebase-auth-service/internal/repository/postgres"
+	authhttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http/auth"
 
-	transporthttp "github.com/sbezhuk/BeeBase-Server/internal/transport/http"
+	"github.com/sbezhuk/beebase-common/authmw"
+	"github.com/sbezhuk/beebase-common/jwks"
+	"github.com/sbezhuk/beebase-common/logger"
+	"github.com/sbezhuk/beebase-common/server"
+
+	transporthttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http"
 )
 
 func main() {
@@ -56,15 +60,32 @@ func run() error {
 
 	log.Info("connected to database")
 
+	privateKey, err := jwtauth.ParsePrivateKey(cfg.JWTPrivateKey)
+	if err != nil {
+		return fmt.Errorf("load JWT private key: %w", err)
+	}
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	kid := jwtauth.KeyID(publicKey)
+
+	jwksHandler, err := jwks.NewHandler(publicKey, kid)
+	if err != nil {
+		return fmt.Errorf("build JWKS handler: %w", err)
+	}
+
 	userRepo := repopostgres.NewUserRepository(db)
 	refreshTokenRepo := repopostgres.NewRefreshTokenRepository(db)
 	hasher := password.NewBcryptHasher(0)
-	tokenIssuer := jwtauth.NewIssuer(cfg.JWTSecret, cfg.AccessTokenTTL)
+	tokenIssuer := jwtauth.NewIssuer(privateKey, kid, cfg.AccessTokenTTL)
+
+	// auth-service verifies its own tokens (for /auth/me) directly against
+	// the public key it already holds in memory, with no JWKS round trip -
+	// unlike every other service, which fetches this over HTTP.
+	tokenVerifier := authmw.NewVerifierFromPublicKey(publicKey)
 
 	authService := appauth.NewService(userRepo, refreshTokenRepo, hasher, tokenIssuer, cfg.RefreshTokenTTL)
 	authHandler := authhttp.NewHandler(authService, log)
 
-	router := transporthttp.NewRouter(log, db, authHandler, tokenIssuer)
+	router := transporthttp.NewRouter(log, db, authHandler, tokenVerifier, jwksHandler)
 
 	srv := server.New(server.Config{
 		Addr:         ":" + cfg.HTTPPort,
@@ -76,7 +97,7 @@ func run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("starting http server", "port", cfg.HTTPPort, "env", cfg.Env)
+		log.Info("starting http server", "port", cfg.HTTPPort, "env", cfg.Env, "jwt_kid", kid)
 		errCh <- srv.Run()
 	}()
 

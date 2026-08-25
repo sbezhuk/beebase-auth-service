@@ -3,7 +3,7 @@ package tokenhash_test
 import (
 	"testing"
 
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/tokenhash"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/tokenhash"
 )
 
 func TestGenerate_ProducesUniqueTokens(t *testing.T) {

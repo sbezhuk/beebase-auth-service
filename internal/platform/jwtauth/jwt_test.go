@@ -1,16 +1,29 @@
 package jwtauth_test
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/jwtauth"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/jwtauth"
 )
 
-func TestIssuer_IssueAndParseRoundTrip(t *testing.T) {
-	issuer := jwtauth.NewIssuer("test-secret", time.Minute)
+func generateKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	return pub, priv
+}
+
+func TestIssuer_IssuesVerifiableEdDSAToken(t *testing.T) {
+	pub, priv := generateKey(t)
+	issuer := jwtauth.NewIssuer(priv, jwtauth.KeyID(pub), time.Minute)
 	userID := uuid.New()
 
 	token, expiresAt, err := issuer.Issue(userID)
@@ -24,46 +37,77 @@ func TestIssuer_IssueAndParseRoundTrip(t *testing.T) {
 		t.Fatal("Issue returned an expiry in the past")
 	}
 
-	gotUserID, err := issuer.Parse(token)
+	var claims jwt.RegisteredClaims
+	parsed, err := jwt.ParseWithClaims(token, &claims, func(tok *jwt.Token) (any, error) {
+		return pub, nil
+	}, jwt.WithValidMethods([]string{"EdDSA"}))
 	if err != nil {
-		t.Fatalf("Parse: %v", err)
+		t.Fatalf("verify with the matching public key: %v", err)
 	}
-	if gotUserID != userID {
-		t.Fatalf("Parse returned %s, want %s", gotUserID, userID)
+	if !parsed.Valid {
+		t.Fatal("token reported invalid")
+	}
+	if claims.Subject != userID.String() {
+		t.Errorf("subject = %q, want %q", claims.Subject, userID.String())
+	}
+	if kid, _ := parsed.Header["kid"].(string); kid != jwtauth.KeyID(pub) {
+		t.Errorf("kid header = %q, want %q", kid, jwtauth.KeyID(pub))
 	}
 }
 
-func TestIssuer_ParseRejectsExpiredToken(t *testing.T) {
-	issuer := jwtauth.NewIssuer("test-secret", -time.Minute)
+func TestIssuer_TokenRejectedByWrongPublicKey(t *testing.T) {
+	_, priv := generateKey(t)
+	otherPub, _ := generateKey(t)
 
+	issuer := jwtauth.NewIssuer(priv, "kid", time.Minute)
 	token, _, err := issuer.Issue(uuid.New())
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
 
-	if _, err := issuer.Parse(token); err == nil {
-		t.Fatal("Parse accepted an expired token")
+	_, err = jwt.Parse(token, func(tok *jwt.Token) (any, error) {
+		return otherPub, nil
+	}, jwt.WithValidMethods([]string{"EdDSA"}))
+	if err == nil {
+		t.Fatal("token verified against a different public key")
 	}
 }
 
-func TestIssuer_ParseRejectsTokenSignedWithDifferentSecret(t *testing.T) {
-	issued := jwtauth.NewIssuer("secret-a", time.Minute)
-	verifier := jwtauth.NewIssuer("secret-b", time.Minute)
+func TestKeyID_IsStableAndDistinct(t *testing.T) {
+	pub1, _ := generateKey(t)
+	pub2, _ := generateKey(t)
 
-	token, _, err := issued.Issue(uuid.New())
+	first := jwtauth.KeyID(pub1)
+	second := jwtauth.KeyID(pub1)
+	if first != second {
+		t.Errorf("KeyID(%v) = %q, then %q: want identical output", pub1, first, second)
+	}
+	if jwtauth.KeyID(pub1) == jwtauth.KeyID(pub2) {
+		t.Error("KeyID collided for two different keys")
+	}
+}
+
+func TestParsePrivateKey_RoundTrip(t *testing.T) {
+	_, priv := generateKey(t)
+	encoded := base64.StdEncoding.EncodeToString(priv)
+
+	got, err := jwtauth.ParsePrivateKey(encoded)
 	if err != nil {
-		t.Fatalf("Issue: %v", err)
+		t.Fatalf("ParsePrivateKey: %v", err)
 	}
-
-	if _, err := verifier.Parse(token); err == nil {
-		t.Fatal("Parse accepted a token signed with a different secret")
+	if !got.Equal(priv) {
+		t.Error("ParsePrivateKey did not round-trip the original key")
 	}
 }
 
-func TestIssuer_ParseRejectsGarbage(t *testing.T) {
-	issuer := jwtauth.NewIssuer("test-secret", time.Minute)
+func TestParsePrivateKey_RejectsWrongLength(t *testing.T) {
+	if _, err := jwtauth.ParsePrivateKey(base64.StdEncoding.EncodeToString([]byte("too-short"))); err == nil {
+		t.Fatal("ParsePrivateKey accepted a key of the wrong length")
+	}
+}
 
-	if _, err := issuer.Parse("not-a-jwt"); err == nil {
-		t.Fatal("Parse accepted a malformed token")
+func TestParsePrivateKey_RejectsInvalidBase64(t *testing.T) {
+	if _, err := jwtauth.ParsePrivateKey("not-valid-base64!!!"); err == nil {
+		t.Fatal("ParsePrivateKey accepted invalid base64")
 	}
 }

@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/sbezhuk/BeeBase-Server/internal/domain/user"
-	repopostgres "github.com/sbezhuk/BeeBase-Server/internal/repository/postgres"
+	"github.com/sbezhuk/beebase-auth-service/internal/domain/user"
+	repopostgres "github.com/sbezhuk/beebase-auth-service/internal/repository/postgres"
 )
 
 func TestUserRepository_CreateAndGet(t *testing.T) {

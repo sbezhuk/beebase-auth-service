@@ -6,7 +6,7 @@ import (
 	"net/mail"
 	"strings"
 
-	"github.com/sbezhuk/BeeBase-Server/internal/transport/http/httpx"
+	"github.com/sbezhuk/beebase-common/httpx"
 )
 
 const minPasswordLength = 8

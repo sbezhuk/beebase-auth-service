@@ -23,7 +23,11 @@ type Config struct {
 
 	LogLevel string // "debug", "info", "warn", "error"
 
-	JWTSecret       string
+	// JWTPrivateKey is a standard-base64-encoded Ed25519 private key (the
+	// 64-byte seed+public form from ed25519.GenerateKey). This is the only
+	// key that can mint access tokens; every other BeeBase service verifies
+	// them against the matching public key via this service's JWKS endpoint.
+	JWTPrivateKey   string
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
 }
@@ -45,7 +49,7 @@ func Load() (*Config, error) {
 
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 
-		JWTSecret:       getEnv("JWT_SECRET", ""),
+		JWTPrivateKey:   getEnv("JWT_PRIVATE_KEY", ""),
 		AccessTokenTTL:  getDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTokenTTL: getDuration("REFRESH_TOKEN_TTL", 720*time.Hour),
 	}
@@ -53,8 +57,8 @@ func Load() (*Config, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("config: DATABASE_URL is required")
 	}
-	if cfg.JWTSecret == "" {
-		return nil, fmt.Errorf("config: JWT_SECRET is required")
+	if cfg.JWTPrivateKey == "" {
+		return nil, fmt.Errorf("config: JWT_PRIVATE_KEY is required")
 	}
 
 	return cfg, nil

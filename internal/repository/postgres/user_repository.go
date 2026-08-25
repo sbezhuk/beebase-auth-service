@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/sbezhuk/BeeBase-Server/internal/domain/user"
+	"github.com/sbezhuk/beebase-auth-service/internal/domain/user"
 )
 
 // uniqueViolationCode is PostgreSQL's SQLSTATE for a unique constraint

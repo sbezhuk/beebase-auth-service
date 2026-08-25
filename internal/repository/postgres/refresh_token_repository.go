@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/sbezhuk/BeeBase-Server/internal/domain/token"
+	"github.com/sbezhuk/beebase-auth-service/internal/domain/token"
 )
 
 // RefreshTokenRepository implements domain/token.Repository against

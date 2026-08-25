@@ -9,11 +9,11 @@ import (
 	"log/slog"
 	"net/http"
 
-	appauth "github.com/sbezhuk/BeeBase-Server/internal/application/auth"
-	"github.com/sbezhuk/BeeBase-Server/internal/domain/user"
-	httpmw "github.com/sbezhuk/BeeBase-Server/internal/transport/http/middleware"
+	appauth "github.com/sbezhuk/beebase-auth-service/internal/application/auth"
+	"github.com/sbezhuk/beebase-auth-service/internal/domain/user"
+	httpmw "github.com/sbezhuk/beebase-common/authmw"
 
-	"github.com/sbezhuk/BeeBase-Server/internal/transport/http/httpx"
+	"github.com/sbezhuk/beebase-common/httpx"
 )
 
 // Error codes for authentication failures, returned as the top-level

@@ -5,6 +5,7 @@ package http_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,13 +16,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
-	appauth "github.com/sbezhuk/BeeBase-Server/internal/application/auth"
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/jwtauth"
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/logger"
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/password"
-	repopostgres "github.com/sbezhuk/BeeBase-Server/internal/repository/postgres"
-	transporthttp "github.com/sbezhuk/BeeBase-Server/internal/transport/http"
-	authhttp "github.com/sbezhuk/BeeBase-Server/internal/transport/http/auth"
+	appauth "github.com/sbezhuk/beebase-auth-service/internal/application/auth"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/jwtauth"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/password"
+	repopostgres "github.com/sbezhuk/beebase-auth-service/internal/repository/postgres"
+	transporthttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http"
+	authhttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http/auth"
+
+	"github.com/sbezhuk/beebase-common/authmw"
+	"github.com/sbezhuk/beebase-common/jwks"
+	"github.com/sbezhuk/beebase-common/logger"
 )
 
 // newTestServer wires a full router against a real PostgreSQL database,
@@ -50,13 +54,25 @@ func newTestServer(t *testing.T) *httptest.Server {
 	userRepo := repopostgres.NewUserRepository(tx)
 	refreshTokenRepo := repopostgres.NewRefreshTokenRepository(tx)
 	hasher := password.NewBcryptHasher(bcrypt.MinCost)
-	issuer := jwtauth.NewIssuer("integration-test-secret", time.Minute)
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	kid := jwtauth.KeyID(pub)
+	issuer := jwtauth.NewIssuer(priv, kid, time.Minute)
+	verifier := authmw.NewVerifierFromPublicKey(pub)
+
+	jwksHandler, err := jwks.NewHandler(pub, kid)
+	if err != nil {
+		t.Fatalf("jwks.NewHandler: %v", err)
+	}
 
 	svc := appauth.NewService(userRepo, refreshTokenRepo, hasher, issuer, time.Hour)
 	log := logger.New("development", "error")
 	handler := authhttp.NewHandler(svc, log)
 
-	router := transporthttp.NewRouter(log, pool, handler, issuer)
+	router := transporthttp.NewRouter(log, pool, handler, verifier, jwksHandler)
 
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)

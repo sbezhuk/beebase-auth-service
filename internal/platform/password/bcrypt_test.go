@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/password"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/password"
 )
 
 func TestBcryptHasher_HashAndVerify(t *testing.T) {

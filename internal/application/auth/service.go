@@ -13,9 +13,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/sbezhuk/BeeBase-Server/internal/domain/token"
-	"github.com/sbezhuk/BeeBase-Server/internal/domain/user"
-	"github.com/sbezhuk/BeeBase-Server/internal/platform/tokenhash"
+	"github.com/sbezhuk/beebase-auth-service/internal/domain/token"
+	"github.com/sbezhuk/beebase-auth-service/internal/domain/user"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/tokenhash"
 )
 
 // Service implements the authentication use cases.

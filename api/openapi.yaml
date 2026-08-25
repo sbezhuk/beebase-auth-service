@@ -1,8 +1,13 @@
 openapi: 3.0.3
 info:
-  title: BeeBase API
-  description: Open-source backend for a beekeeper management application.
-  version: 0.2.0
+  title: BeeBase Auth Service API
+  description: >
+    Authentication service for BeeBase, an open-source backend for a
+    beekeeper management application split into microservices. Holds the
+    only private key in the deployment; every other BeeBase service
+    verifies the tokens issued here via /.well-known/jwks.json instead of
+    calling this service directly.
+  version: 0.3.0
 servers:
   - url: http://localhost:8080
 
@@ -11,8 +16,31 @@ tags:
     description: Liveness and readiness probes.
   - name: auth
     description: Registration, login, session refresh, logout, and the current user.
+  - name: keys
+    description: Public key distribution for other services to verify access tokens.
 
 paths:
+  /.well-known/jwks.json:
+    get:
+      tags: [keys]
+      summary: This service's public key, as a JSON Web Key Set
+      description: >
+        Fetched and cached by every other BeeBase service to verify access
+        tokens issued here. Contains only the public key — never the
+        private key used to sign tokens.
+      responses:
+        "200":
+          description: A JSON Web Key Set (RFC 7517) containing one EdDSA public key.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+
   /health:
     get:
       tags: [system]
