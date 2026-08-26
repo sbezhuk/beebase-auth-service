@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -30,13 +31,23 @@ type Config struct {
 	JWTPrivateKey   string
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
+
+	// CookieDomain scopes the refresh token cookie; empty means "host only"
+	// (the domain the response came from), which is right for local dev.
+	// CookieSecure controls the cookie's Secure flag; it defaults to true
+	// unless Env is "development", so local HTTP dev keeps working while
+	// production never ships the cookie over plaintext.
+	CookieDomain string
+	CookieSecure bool
 }
 
 // Load builds a Config from environment variables, falling back to
 // defaults suitable for local development where a variable is unset.
 func Load() (*Config, error) {
+	env := getEnv("APP_ENV", "development")
+
 	cfg := &Config{
-		Env: getEnv("APP_ENV", "development"),
+		Env: env,
 
 		HTTPPort:            getEnv("HTTP_PORT", "8080"),
 		HTTPReadTimeout:     getDuration("HTTP_READ_TIMEOUT", 5*time.Second),
@@ -52,6 +63,9 @@ func Load() (*Config, error) {
 		JWTPrivateKey:   getEnv("JWT_PRIVATE_KEY", ""),
 		AccessTokenTTL:  getDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTokenTTL: getDuration("REFRESH_TOKEN_TTL", 720*time.Hour),
+
+		CookieDomain: getEnv("COOKIE_DOMAIN", ""),
+		CookieSecure: getBool("COOKIE_SECURE", env != "development"),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -81,4 +95,16 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+func getBool(key string, fallback bool) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
 }

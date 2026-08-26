@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -24,6 +25,7 @@ import (
 	authhttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http/auth"
 
 	"github.com/sbezhuk/beebase-common/authmw"
+	"github.com/sbezhuk/beebase-common/httpx"
 	"github.com/sbezhuk/beebase-common/jwks"
 	"github.com/sbezhuk/beebase-common/logger"
 )
@@ -70,7 +72,8 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 	svc := appauth.NewService(userRepo, refreshTokenRepo, hasher, issuer, time.Hour)
 	log := logger.New("development", "error")
-	handler := authhttp.NewHandler(svc, log)
+	cookieOpts := httpx.CookieOptions{SameSite: http.SameSiteLaxMode}
+	handler := authhttp.NewHandler(svc, log, cookieOpts)
 
 	router := transporthttp.NewRouter(log, pool, handler, verifier, jwksHandler)
 
@@ -79,19 +82,78 @@ func newTestServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func postJSON(t *testing.T, url string, body any) *http.Response {
+// newHTTPClient returns a client with a cookie jar, so the refresh token
+// cookie set by register/login/refresh is remembered and replayed
+// automatically on subsequent requests, the way a browser would.
+func newHTTPClient(t *testing.T) *http.Client {
 	t.Helper()
 
-	buf, err := json.Marshal(body)
+	jar, err := cookiejar.New(nil)
 	if err != nil {
-		t.Fatalf("marshal request body: %v", err)
+		t.Fatalf("create cookie jar: %v", err)
+	}
+	return &http.Client{Jar: jar}
+}
+
+func postJSON(t *testing.T, client *http.Client, url string, body any) *http.Response {
+	t.Helper()
+
+	var reqBody *bytes.Reader
+	if body == nil {
+		reqBody = bytes.NewReader(nil)
+	} else {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal request body: %v", err)
+		}
+		reqBody = bytes.NewReader(buf)
 	}
 
-	resp, err := http.Post(url, "application/json", bytes.NewReader(buf))
+	req, err := http.NewRequest(http.MethodPost, url, reqBody)
+	if err != nil {
+		t.Fatalf("build POST %s: %v", url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("POST %s: %v", url, err)
 	}
 	return resp
+}
+
+// postWithCookie POSTs to url with no body, presenting refreshToken as the
+// refresh_token cookie explicitly — used to probe a specific (e.g.
+// rotated-out or revoked) token value regardless of what a client's jar
+// currently holds.
+func postWithCookie(t *testing.T, url, refreshToken string) *http.Response {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		t.Fatalf("build POST %s: %v", url, err)
+	}
+	req.AddCookie(&http.Cookie{Name: "refresh_token", Value: refreshToken})
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	return resp
+}
+
+// refreshCookieValue returns the value of the refresh_token cookie set on
+// resp, failing the test if it isn't present.
+func refreshCookieValue(t *testing.T, resp *http.Response) string {
+	t.Helper()
+
+	for _, c := range resp.Cookies() {
+		if c.Name == "refresh_token" {
+			return c.Value
+		}
+	}
+	t.Fatal("response did not set a refresh_token cookie")
+	return ""
 }
 
 func decodeJSON(t *testing.T, resp *http.Response, dst any) {
@@ -105,11 +167,12 @@ func decodeJSON(t *testing.T, resp *http.Response, dst any) {
 
 func TestAuthFlow_RegisterLoginRefreshLogoutMe(t *testing.T) {
 	srv := newTestServer(t)
+	client := newHTTPClient(t)
 
 	var session authhttp.SessionResponse
 
 	// Register
-	resp := postJSON(t, srv.URL+"/api/v1/auth/register", map[string]string{
+	resp := postJSON(t, client, srv.URL+"/api/v1/auth/register", map[string]string{
 		"email":    "flow@example.com",
 		"password": "supersecret",
 	})
@@ -117,8 +180,11 @@ func TestAuthFlow_RegisterLoginRefreshLogoutMe(t *testing.T) {
 		t.Fatalf("register: status = %d, want %d", resp.StatusCode, http.StatusCreated)
 	}
 	decodeJSON(t, resp, &session)
-	if session.AccessToken == "" || session.RefreshToken == "" {
-		t.Fatal("register: missing tokens in response")
+	if session.AccessToken == "" {
+		t.Fatal("register: missing access token in response")
+	}
+	if refreshCookieValue(t, resp) == "" {
+		t.Fatal("register: empty refresh_token cookie")
 	}
 
 	// Me, with the freshly issued access token
@@ -137,52 +203,54 @@ func TestAuthFlow_RegisterLoginRefreshLogoutMe(t *testing.T) {
 		t.Errorf("me: email = %q, want flow@example.com", me.Email)
 	}
 
-	// Login
-	resp = postJSON(t, srv.URL+"/api/v1/auth/login", map[string]string{
+	// Login: the client's jar now holds login's refresh_token cookie,
+	// replacing register's.
+	resp = postJSON(t, client, srv.URL+"/api/v1/auth/login", map[string]string{
 		"email":    "flow@example.com",
 		"password": "supersecret",
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("login: status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
-	var loginSession authhttp.SessionResponse
-	decodeJSON(t, resp, &loginSession)
+	loginRefreshToken := refreshCookieValue(t, resp)
 
-	// Refresh: rotates the refresh token issued at login
-	resp = postJSON(t, srv.URL+"/api/v1/auth/refresh", map[string]string{
-		"refresh_token": loginSession.RefreshToken,
-	})
+	// Refresh: the jar automatically presents login's refresh_token cookie;
+	// the response rotates it to a new value.
+	resp = postJSON(t, client, srv.URL+"/api/v1/auth/refresh", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("refresh: status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
-	var refreshed authhttp.SessionResponse
-	decodeJSON(t, resp, &refreshed)
-	if refreshed.RefreshToken == loginSession.RefreshToken {
+	rotatedRefreshToken := refreshCookieValue(t, resp)
+	if rotatedRefreshToken == loginRefreshToken {
 		t.Fatal("refresh: token was not rotated")
 	}
 
 	// The old (rotated-out) refresh token must now be rejected.
-	resp = postJSON(t, srv.URL+"/api/v1/auth/refresh", map[string]string{
-		"refresh_token": loginSession.RefreshToken,
-	})
+	resp = postWithCookie(t, srv.URL+"/api/v1/auth/refresh", loginRefreshToken)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("refresh with rotated-out token: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
 	}
 
-	// Logout with the current (rotated) refresh token.
-	resp = postJSON(t, srv.URL+"/api/v1/auth/logout", map[string]string{
-		"refresh_token": refreshed.RefreshToken,
-	})
+	// Logout: the jar presents the current (rotated) refresh_token cookie.
+	resp = postJSON(t, client, srv.URL+"/api/v1/auth/logout", nil)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("logout: status = %d, want %d", resp.StatusCode, http.StatusNoContent)
 	}
 
 	// The logged-out refresh token must no longer work.
-	resp = postJSON(t, srv.URL+"/api/v1/auth/refresh", map[string]string{
-		"refresh_token": refreshed.RefreshToken,
-	})
+	resp = postWithCookie(t, srv.URL+"/api/v1/auth/refresh", rotatedRefreshToken)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("refresh after logout: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+func TestAuthFlow_RefreshWithoutCookieIsUnauthorized(t *testing.T) {
+	srv := newTestServer(t)
+	client := newHTTPClient(t)
+
+	resp := postJSON(t, client, srv.URL+"/api/v1/auth/refresh", nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("refresh without cookie: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
 	}
 }
 
@@ -200,8 +268,9 @@ func TestAuthFlow_MeWithoutTokenIsUnauthorized(t *testing.T) {
 
 func TestAuthFlow_LoginWithWrongPassword(t *testing.T) {
 	srv := newTestServer(t)
+	client := newHTTPClient(t)
 
-	resp := postJSON(t, srv.URL+"/api/v1/auth/register", map[string]string{
+	resp := postJSON(t, client, srv.URL+"/api/v1/auth/register", map[string]string{
 		"email":    "wrongpass@example.com",
 		"password": "correct-password",
 	})
@@ -209,7 +278,7 @@ func TestAuthFlow_LoginWithWrongPassword(t *testing.T) {
 		t.Fatalf("register: status = %d, want %d", resp.StatusCode, http.StatusCreated)
 	}
 
-	resp = postJSON(t, srv.URL+"/api/v1/auth/login", map[string]string{
+	resp = postJSON(t, client, srv.URL+"/api/v1/auth/login", map[string]string{
 		"email":    "wrongpass@example.com",
 		"password": "wrong-password",
 	})

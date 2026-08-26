@@ -66,14 +66,3 @@ func TestLoginRequest_Validate(t *testing.T) {
 		t.Errorf("email code = %q, want %q", code, CodeEmailInvalid)
 	}
 }
-
-func TestRefreshRequest_Validate(t *testing.T) {
-	if fields := (&RefreshRequest{RefreshToken: "abc"}).Validate(); len(fields) != 0 {
-		t.Errorf("expected no errors, got %v", fields)
-	}
-
-	fields := (&RefreshRequest{RefreshToken: "   "}).Validate()
-	if code := fields["refresh_token"]; code != CodeRefreshTokenRequired {
-		t.Errorf("refresh_token code = %q, want %q", code, CodeRefreshTokenRequired)
-	}
-}

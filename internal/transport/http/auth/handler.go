@@ -26,15 +26,50 @@ const (
 	CodeInvalidRefreshToken = "invalid_refresh_token"
 )
 
+// refreshTokenCookieName is the cookie the refresh token travels in. It's
+// never exposed in a JSON response body, so client-side JavaScript can
+// never read it.
+const refreshTokenCookieName = "refresh_token"
+
+// refreshTokenCookiePath scopes the cookie to the auth endpoints that
+// actually need it, so it isn't attached to every other request the
+// browser makes through the gateway.
+const refreshTokenCookiePath = "/api/v1/auth"
+
 // Handler exposes the authentication HTTP endpoints.
 type Handler struct {
 	service *appauth.Service
 	log     *slog.Logger
+	cookie  httpx.CookieOptions
 }
 
-// NewHandler returns a Handler backed by service.
-func NewHandler(service *appauth.Service, log *slog.Logger) *Handler {
-	return &Handler{service: service, log: log}
+// NewHandler returns a Handler backed by service. cookie configures how
+// the refresh token cookie is scoped and secured (domain, Secure,
+// SameSite).
+func NewHandler(service *appauth.Service, log *slog.Logger, cookie httpx.CookieOptions) *Handler {
+	return &Handler{service: service, log: log, cookie: cookie}
+}
+
+// setRefreshCookie attaches session's refresh token as an HttpOnly cookie.
+func (h *Handler) setRefreshCookie(w http.ResponseWriter, session *appauth.Session) {
+	httpx.SetCookie(w, refreshTokenCookieName, session.RefreshToken, refreshTokenCookiePath, session.RefreshTokenExpiresAt, h.cookie)
+}
+
+// clearRefreshCookie expires the refresh token cookie, e.g. on logout.
+func (h *Handler) clearRefreshCookie(w http.ResponseWriter) {
+	httpx.ClearCookie(w, refreshTokenCookieName, refreshTokenCookiePath, h.cookie)
+}
+
+// refreshTokenFromCookie reads the raw refresh token out of the request
+// cookie, writing an unauthorized response and returning false if it's
+// missing.
+func (h *Handler) refreshTokenFromCookie(w http.ResponseWriter, r *http.Request) (string, bool) {
+	c, err := r.Cookie(refreshTokenCookieName)
+	if err != nil || c.Value == "" {
+		httpx.WriteError(w, http.StatusUnauthorized, CodeInvalidRefreshToken, "invalid or expired refresh token")
+		return "", false
+	}
+	return c.Value, true
 }
 
 // Register handles POST /auth/register.
@@ -53,6 +88,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.setRefreshCookie(w, session)
 	httpx.WriteJSON(w, http.StatusCreated, newSessionResponse(session))
 }
 
@@ -72,37 +108,40 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.setRefreshCookie(w, session)
 	httpx.WriteJSON(w, http.StatusOK, newSessionResponse(session))
 }
 
 // Refresh handles POST /auth/refresh.
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
-	var req RefreshRequest
-	if !decodeAndValidate(w, r, &req) {
+	rawToken, ok := h.refreshTokenFromCookie(w, r)
+	if !ok {
 		return
 	}
 
-	session, err := h.service.Refresh(r.Context(), req.RefreshToken)
+	session, err := h.service.Refresh(r.Context(), rawToken)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
 
+	h.setRefreshCookie(w, session)
 	httpx.WriteJSON(w, http.StatusOK, newSessionResponse(session))
 }
 
 // Logout handles POST /auth/logout.
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
-	var req RefreshRequest
-	if !decodeAndValidate(w, r, &req) {
+	rawToken, ok := h.refreshTokenFromCookie(w, r)
+	if !ok {
 		return
 	}
 
-	if err := h.service.Logout(r.Context(), req.RefreshToken); err != nil {
+	if err := h.service.Logout(r.Context(), rawToken); err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
 
+	h.clearRefreshCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 

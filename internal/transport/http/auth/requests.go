@@ -15,11 +15,10 @@ const minPasswordLength = 8
 // localized message; the field carrying no error is simply absent from the
 // response's "fields" map.
 const (
-	CodeEmailRequired        = "email_required"
-	CodeEmailInvalid         = "email_invalid"
-	CodePasswordRequired     = "password_required"
-	CodePasswordTooShort     = "password_too_short"
-	CodeRefreshTokenRequired = "refresh_token_required"
+	CodeEmailRequired    = "email_required"
+	CodeEmailInvalid     = "email_invalid"
+	CodePasswordRequired = "password_required"
+	CodePasswordTooShort = "password_too_short"
 )
 
 // validatable is implemented by every request DTO in this package.
@@ -77,19 +76,6 @@ func (r *LoginRequest) Validate() map[string]string {
 	}
 	if r.Password == "" {
 		fields["password"] = CodePasswordRequired
-	}
-	return fields
-}
-
-// RefreshRequest is the body of POST /auth/refresh and POST /auth/logout.
-type RefreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
-}
-
-func (r *RefreshRequest) Validate() map[string]string {
-	fields := map[string]string{}
-	if strings.TrimSpace(r.RefreshToken) == "" {
-		fields["refresh_token"] = CodeRefreshTokenRequired
 	}
 	return fields
 }

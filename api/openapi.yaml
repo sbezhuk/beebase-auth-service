@@ -85,6 +85,9 @@ paths:
       responses:
         "201":
           description: Account created; session established.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/RefreshTokenCookie"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SessionResponse" }
@@ -111,6 +114,9 @@ paths:
       responses:
         "200":
           description: Session established.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/RefreshTokenCookie"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SessionResponse" }
@@ -132,28 +138,27 @@ paths:
       tags: [auth]
       summary: Rotate a refresh token for a new access/refresh pair
       description: >
-        The presented refresh token is revoked and a new pair is issued
-        (rotation). Presenting a token that was already revoked is treated
-        as evidence of theft: every refresh token belonging to that user is
-        revoked, ending the whole session family.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/RefreshRequest" }
+        The refresh token travels as an HttpOnly cookie (see
+        refreshTokenCookie), never in the request body. The presented token
+        is revoked and a new pair is issued (rotation). Presenting a token
+        that was already revoked is treated as evidence of theft: every
+        refresh token belonging to that user is revoked, ending the whole
+        session family.
+      security:
+        - refreshTokenCookie: []
       responses:
         "200":
           description: New session issued.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/RefreshTokenCookie"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SessionResponse" }
-        "400":
-          description: Request failed validation.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
         "401":
-          description: The refresh token is unknown, expired, or already revoked.
+          description: >
+            The refresh_token cookie is missing, or the token it carries is
+            unknown, expired, or already revoked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -163,21 +168,25 @@ paths:
       tags: [auth]
       summary: Revoke a refresh token
       description: >
-        Idempotent: revoking an already-revoked or unknown token still
-        returns 204, since the desired end state already holds.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/RefreshRequest" }
+        The refresh token travels as an HttpOnly cookie (see
+        refreshTokenCookie), never in the request body. Idempotent:
+        revoking an already-revoked or unknown token still returns 204,
+        since the desired end state already holds.
+      security:
+        - refreshTokenCookie: []
       responses:
         "204":
-          description: The token is revoked (or already was).
-        "400":
-          description: Request failed validation.
+          description: The token is revoked (or already was); the cookie is cleared.
+          headers:
+            Set-Cookie:
+              description: >-
+                Clears the refresh_token cookie (Max-Age=0).
+              schema: { type: string }
+        "401":
+          description: The refresh_token cookie is missing.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/v1/auth/me:
     get:
@@ -205,6 +214,21 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    refreshTokenCookie:
+      type: apiKey
+      in: cookie
+      name: refresh_token
+      description: >-
+        Opaque, single-use refresh token. Set as an HttpOnly cookie by
+        /register, /login, and /refresh, scoped to /api/v1/auth — never
+        readable from client-side JavaScript and never present in a JSON
+        response body.
+
+  headers:
+    RefreshTokenCookie:
+      description: >-
+        Sets the refresh_token cookie (HttpOnly; scoped to /api/v1/auth).
+      schema: { type: string }
 
   schemas:
     StatusResponse:
@@ -221,17 +245,35 @@ components:
 
     SessionResponse:
       type: object
+      description: >-
+        The refresh token itself is never included here — it's set as an
+        HttpOnly refresh_token cookie instead (see the refreshTokenCookie
+        security scheme), so it's never exposed to client-side JavaScript.
+        Its expiry is returned as refresh_token_expires_at, since that's
+        plain metadata a client can use to know when it'll need to
+        re-authenticate — unlike the cookie's own Expires attribute, which
+        JavaScript can never read.
       properties:
         access_token:
           type: string
           description: >-
             Short-lived JWT. Send as "Authorization: Bearer <token>".
-        access_token_expires_at: { type: string, format: date-time }
-        refresh_token:
-          type: string
+        access_token_expires_at:
+          type: integer
+          format: int64
           description: >-
-            Opaque, single-use token. Store it and send it only to
-            /auth/refresh or /auth/logout.
+            Unix timestamp (seconds) access_token expires at (issued at
+            now + ACCESS_TOKEN_TTL, 15m by default) — matches the "exp"
+            claim already inside the JWT, and is always well before
+            refresh_token_expires_at.
+          example: 1768470300
+        refresh_token_expires_at:
+          type: integer
+          format: int64
+          description: >-
+            Unix timestamp (seconds) the refresh_token cookie expires at
+            (issued at now + REFRESH_TOKEN_TTL, 720h/30d by default).
+          example: 1771061400
         user: { $ref: "#/components/schemas/UserResponse" }
 
     RegisterRequest:
@@ -247,12 +289,6 @@ components:
       properties:
         email: { type: string, format: email }
         password: { type: string }
-
-    RefreshRequest:
-      type: object
-      required: [refresh_token]
-      properties:
-        refresh_token: { type: string }
 
     ErrorResponse:
       type: object
@@ -299,5 +335,4 @@ components:
                   - email_invalid
                   - password_required
                   - password_too_short
-                  - refresh_token_required
               example: { email: "email_invalid" }

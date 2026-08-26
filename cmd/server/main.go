@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,6 +22,7 @@ import (
 	authhttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http/auth"
 
 	"github.com/sbezhuk/beebase-common/authmw"
+	"github.com/sbezhuk/beebase-common/httpx"
 	"github.com/sbezhuk/beebase-common/jwks"
 	"github.com/sbezhuk/beebase-common/logger"
 	"github.com/sbezhuk/beebase-common/server"
@@ -83,7 +85,13 @@ func run() error {
 	tokenVerifier := authmw.NewVerifierFromPublicKey(publicKey)
 
 	authService := appauth.NewService(userRepo, refreshTokenRepo, hasher, tokenIssuer, cfg.RefreshTokenTTL)
-	authHandler := authhttp.NewHandler(authService, log)
+
+	cookieOpts := httpx.CookieOptions{
+		Domain:   cfg.CookieDomain,
+		Secure:   cfg.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	}
+	authHandler := authhttp.NewHandler(authService, log, cookieOpts)
 
 	router := transporthttp.NewRouter(log, db, authHandler, tokenVerifier, jwksHandler)
 

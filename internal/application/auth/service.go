@@ -155,11 +155,12 @@ func (s *Service) issueSession(ctx context.Context, u *user.User) (*Session, err
 	}
 
 	return &Session{
-		UserID:               u.ID,
-		Email:                u.Email,
-		AccessToken:          accessToken,
-		AccessTokenExpiresAt: expiresAt,
-		RefreshToken:         rawRefresh,
+		UserID:                u.ID,
+		Email:                 u.Email,
+		AccessToken:           accessToken,
+		AccessTokenExpiresAt:  expiresAt,
+		RefreshToken:          rawRefresh,
+		RefreshTokenExpiresAt: rt.ExpiresAt,
 	}, nil
 }
 

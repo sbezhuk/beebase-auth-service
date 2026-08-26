@@ -10,12 +10,19 @@ import (
 )
 
 // SessionResponse is returned by register, login, and refresh: it carries
-// a freshly issued access/refresh token pair.
+// a freshly issued access token and the refresh token's expiry. The
+// refresh token itself is never included here — it's set as an HttpOnly
+// cookie instead, so it's never exposed to client-side JavaScript. Its
+// expiry is plain metadata, not a secret, so it's safe to return here for
+// a client that wants to know when it'll need to re-authenticate.
+//
+// Both expiry fields are Unix timestamps (seconds), matching the "exp"
+// claim already inside the access token JWT itself.
 type SessionResponse struct {
-	AccessToken          string       `json:"access_token"`
-	AccessTokenExpiresAt time.Time    `json:"access_token_expires_at"`
-	RefreshToken         string       `json:"refresh_token"`
-	User                 UserResponse `json:"user"`
+	AccessToken           string       `json:"access_token"`
+	AccessTokenExpiresAt  int64        `json:"access_token_expires_at"`
+	RefreshTokenExpiresAt int64        `json:"refresh_token_expires_at"`
+	User                  UserResponse `json:"user"`
 }
 
 // UserResponse is the public representation of a user.
@@ -27,9 +34,9 @@ type UserResponse struct {
 
 func newSessionResponse(s *appauth.Session) SessionResponse {
 	return SessionResponse{
-		AccessToken:          s.AccessToken,
-		AccessTokenExpiresAt: s.AccessTokenExpiresAt,
-		RefreshToken:         s.RefreshToken,
+		AccessToken:           s.AccessToken,
+		AccessTokenExpiresAt:  s.AccessTokenExpiresAt.Unix(),
+		RefreshTokenExpiresAt: s.RefreshTokenExpiresAt.Unix(),
 		User: UserResponse{
 			ID:    s.UserID,
 			Email: s.Email,

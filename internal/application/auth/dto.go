@@ -21,9 +21,10 @@ type LoginInput struct {
 // Session is the result of any use case that establishes or renews a
 // user's session: Register, Login, and Refresh all return one.
 type Session struct {
-	UserID               uuid.UUID
-	Email                string
-	AccessToken          string
-	AccessTokenExpiresAt time.Time
-	RefreshToken         string
+	UserID                uuid.UUID
+	Email                 string
+	AccessToken           string
+	AccessTokenExpiresAt  time.Time
+	RefreshToken          string
+	RefreshTokenExpiresAt time.Time
 }
