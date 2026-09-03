@@ -1,5 +1,6 @@
 .PHONY: run build fmt vet test test-integration lint tidy keygen \
 	migrate-up migrate-down migrate-new migrate-install \
+	db-clear \
 	docker-up docker-down docker-build docker-logs
 
 APP_NAME := server
@@ -44,6 +45,9 @@ migrate-new: ## Create a new migration pair: make migrate-new name=add_apiaries_
 
 migrate-install: ## Install the golang-migrate CLI used by the targets above.
 	go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+
+db-clear: ## Permanently delete all data in DATABASE_URL, keeping the schema. Prompts for confirmation.
+	go run ./cmd/dbclear
 
 docker-up: ## Start postgres + app via docker-compose.
 	docker compose up --build
