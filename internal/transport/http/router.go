@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	authhttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http/auth"
+	profilehttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http/profile"
 	httpmw "github.com/sbezhuk/beebase-common/authmw"
 )
 
@@ -20,6 +21,7 @@ func NewRouter(
 	log *slog.Logger,
 	db *pgxpool.Pool,
 	authHandler *authhttp.Handler,
+	profileHandler *profilehttp.Handler,
 	tokenParser httpmw.AccessTokenParser,
 	jwksHandler http.HandlerFunc,
 ) http.Handler {
@@ -43,10 +45,25 @@ func NewRouter(
 		r.Post("/refresh", authHandler.Refresh)
 		r.Post("/logout", authHandler.Logout)
 
+		r.Post("/2fa/setup/verify", authHandler.SetupVerifyOTP)
+		r.Post("/login/verify-otp", authHandler.LoginVerifyOTP)
+
+		r.Post("/password-reset/request", authHandler.RequestPasswordReset)
+		r.Post("/password-reset/verify-otp", authHandler.VerifyPasswordResetOTP)
+		r.Post("/password-reset/confirm", authHandler.ConfirmPasswordReset)
+
 		r.Group(func(r chi.Router) {
 			r.Use(httpmw.RequireAuth(tokenParser))
 			r.Get("/me", authHandler.Me)
+			r.Post("/change-password", authHandler.ChangePassword)
 		})
+	})
+
+	r.Route("/api/v1/profile", func(r chi.Router) {
+		r.Use(httpmw.RequireAuth(tokenParser))
+
+		r.Get("/", profileHandler.Get)
+		r.Put("/", profileHandler.Update)
 	})
 
 	return r

@@ -39,6 +39,29 @@ type Config struct {
 	// production never ships the cookie over plaintext.
 	CookieDomain string
 	CookieSecure bool
+
+	// MediaServiceURL is media-service's base URL. Updating a profile's
+	// avatar asks it, once, to verify the caller actually owns the
+	// referenced media id before it's persisted.
+	MediaServiceURL string
+
+	// TOTPEncryptionKey is a standard-base64-encoded 32-byte AES-256 key
+	// used to encrypt TOTP secrets at rest. Decoding and length validation
+	// happen in main.go next to totpsecret.NewCipher, the same way
+	// JWTPrivateKey's parsing lives in jwtauth.ParsePrivateKey rather than
+	// here.
+	TOTPEncryptionKey string
+	// TOTPIssuer is the label shown in a user's authenticator app
+	// alongside their account name.
+	TOTPIssuer string
+
+	TOTPSetupTokenTTL               time.Duration
+	LoginChallengeTTL               time.Duration
+	PasswordResetFlowTTL            time.Duration
+	PasswordResetTokenTTL           time.Duration
+	TOTPMaxFailedAttempts           int
+	TOTPLockoutDuration             time.Duration
+	PasswordResetFlowMaxOTPAttempts int
 }
 
 // Load builds a Config from environment variables, falling back to
@@ -66,6 +89,19 @@ func Load() (*Config, error) {
 
 		CookieDomain: getEnv("COOKIE_DOMAIN", ""),
 		CookieSecure: getBool("COOKIE_SECURE", env != "development"),
+
+		MediaServiceURL: getEnv("MEDIA_SERVICE_URL", ""),
+
+		TOTPEncryptionKey: getEnv("TOTP_ENCRYPTION_KEY", ""),
+		TOTPIssuer:        getEnv("TOTP_ISSUER", "BeeBase"),
+
+		TOTPSetupTokenTTL:               getDuration("TOTP_SETUP_TOKEN_TTL", 15*time.Minute),
+		LoginChallengeTTL:               getDuration("LOGIN_CHALLENGE_TTL", 5*time.Minute),
+		PasswordResetFlowTTL:            getDuration("PASSWORD_RESET_FLOW_TTL", 10*time.Minute),
+		PasswordResetTokenTTL:           getDuration("PASSWORD_RESET_TOKEN_TTL", 10*time.Minute),
+		TOTPMaxFailedAttempts:           getInt("TOTP_MAX_FAILED_ATTEMPTS", 5),
+		TOTPLockoutDuration:             getDuration("TOTP_LOCKOUT_DURATION", 15*time.Minute),
+		PasswordResetFlowMaxOTPAttempts: getInt("PASSWORD_RESET_FLOW_MAX_OTP_ATTEMPTS", 5),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -73,6 +109,12 @@ func Load() (*Config, error) {
 	}
 	if cfg.JWTPrivateKey == "" {
 		return nil, fmt.Errorf("config: JWT_PRIVATE_KEY is required")
+	}
+	if cfg.MediaServiceURL == "" {
+		return nil, fmt.Errorf("config: MEDIA_SERVICE_URL is required")
+	}
+	if cfg.TOTPEncryptionKey == "" {
+		return nil, fmt.Errorf("config: TOTP_ENCRYPTION_KEY is required")
 	}
 
 	return cfg, nil
@@ -95,6 +137,18 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+func getInt(key string, fallback int) int {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 func getBool(key string, fallback bool) bool {

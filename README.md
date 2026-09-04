@@ -38,7 +38,8 @@ live from `/.well-known/jwks.json`, and can never forge one — see
 
 ```bash
 cp .env.example .env
-make keygen   # prints a JWT_PRIVATE_KEY line — paste it into .env
+make keygen                          # prints a JWT_PRIVATE_KEY line — paste it into .env
+openssl rand -base64 32              # prints a TOTP_ENCRYPTION_KEY value — paste it into .env
 
 # Option A: run Postgres in Docker, app on the host
 docker compose up -d postgres
@@ -59,6 +60,12 @@ curl http://localhost:8080/.well-known/jwks.json   # this service's public key
 curl -X POST http://localhost:8080/api/v1/auth/register \
   -H 'Content-Type: application/json' \
   -d '{"email":"you@example.com","password":"supersecret"}'
+# -> {"status":"totp_setup_required","setup_token":"...","otpauth_uri":"otpauth://...","secret":"...","expires_at":...}
+# Scan otpauth_uri (or enter secret manually) in Google Authenticator, then:
+curl -X POST http://localhost:8080/api/v1/auth/2fa/setup/verify \
+  -H 'Content-Type: application/json' \
+  -d '{"setup_token":"<from above>","otp":"<6-digit code>"}'
+# -> a full session (access_token in the body, refresh_token as an HttpOnly cookie)
 ```
 
 The full API surface is documented in [api/openapi.yaml](api/openapi.yaml).
@@ -82,6 +89,16 @@ All configuration is via environment variables (see
 | `JWT_PRIVATE_KEY`           | *(required)*                 | Base64-encoded Ed25519 private key (`make keygen`) |
 | `ACCESS_TOKEN_TTL`          | `15m`                        | Access token lifetime                      |
 | `REFRESH_TOKEN_TTL`         | `720h` (30 days)             | Refresh token lifetime                     |
+| `MEDIA_SERVICE_URL`         | *(required)*                 | media-service's base URL, used to verify ownership of a profile's avatar |
+| `TOTP_ENCRYPTION_KEY`       | *(required)*                 | Base64-encoded 32-byte AES-256 key encrypting TOTP secrets at rest (`openssl rand -base64 32`) |
+| `TOTP_ISSUER`               | `BeeBase`                    | Label shown in a user's authenticator app |
+| `TOTP_SETUP_TOKEN_TTL`      | `15m`                        | How long a pending 2FA setup challenge stays valid |
+| `LOGIN_CHALLENGE_TTL`       | `5m`                         | How long a pending login OTP challenge stays valid |
+| `PASSWORD_RESET_FLOW_TTL`   | `10m`                        | How long a forgot-password flow stays valid overall |
+| `PASSWORD_RESET_TOKEN_TTL`  | `10m`                        | How long the post-OTP-verify reset token stays valid |
+| `TOTP_MAX_FAILED_ATTEMPTS`  | `5`                          | Failed OTP attempts (login/setup/change-password) before an account-level lockout |
+| `TOTP_LOCKOUT_DURATION`     | `15m`                        | How long an account-level OTP lockout lasts |
+| `PASSWORD_RESET_FLOW_MAX_OTP_ATTEMPTS` | `5`               | Failed OTP attempts on a single forgot-password flow before that flow is dead |
 | `TEST_DATABASE_URL`         | *(unset)*                    | Used only by `make test-integration`, never by the app |
 
 `JWT_PRIVATE_KEY` must stay **identical across every replica** of this
@@ -101,16 +118,24 @@ internal/
   domain/                       entities + repository ports; no infrastructure dependency
     user/                         User entity, Repository port
     token/                        RefreshToken entity, Repository port
+    totp/                         TOTP Credential entity (2FA enrollment), Repository port
+    loginchallenge/                LoginChallenge entity (login OTP gate), Repository port
+    passwordreset/                 PasswordResetFlow entity, Repository port
   application/                   use cases; depend only on domain ports
-    auth/                          register, login, refresh, logout, current user
+    auth/                          register, login, refresh, logout, current user, update profile,
+                                     2FA setup/verify, change password, forgot-password flow
   repository/postgres/           domain ports implemented against PostgreSQL (pgx, explicit SQL)
   platform/
     postgres/                      pgx connection pool
     password/                       bcrypt password hashing
     jwtauth/                        EdDSA access-token issuing + key management
-    tokenhash/                      opaque refresh token generation + hashing
+    tokenhash/                      opaque refresh/challenge/flow token generation + hashing
+    totp/                           RFC 6238 TOTP generation + validation (Google Authenticator)
+    totpsecret/                     AES-256-GCM encryption for TOTP secrets at rest
+    mediaclient/                    media-service client (verifies avatar ownership)
   transport/http/                 chi router, health/ready/JWKS handlers
     auth/                           auth HTTP handlers, request validation, responses
+    profile/                        profile HTTP handlers, request validation, responses
 ```
 
 logger, httpx (response/error helpers), the graceful-shutdown server
@@ -144,6 +169,42 @@ they only call into an application service.
   cause (unknown email vs. wrong password; expired vs. revoked vs. unknown
   token), so a client can't use error responses to enumerate accounts or
   probe token state.
+
+## Two-factor authentication (TOTP)
+
+Google Authenticator-compatible TOTP (RFC 6238) is required to complete
+registration, to log in, to change a password, and to recover a forgotten
+one. Credentials alone are never sufficient for any of these.
+
+- **Register** creates the account and returns a setup challenge (an
+  `otpauth://` URI and raw secret) — not a session. `POST
+  /auth/2fa/setup/verify` with the returned `setup_token` and a valid code
+  completes setup and issues the first session.
+- **Login** never issues a session directly: on valid credentials it
+  returns either an OTP challenge (`POST /auth/login/verify-otp` to
+  finish) if 2FA is already enabled, or a fresh setup challenge if it
+  isn't — an account that starts registration but never finishes 2FA
+  setup can always resume this way, gated on knowing the current password.
+- **Change password** (`POST /auth/change-password`, authenticated)
+  requires the current password *and* a valid OTP together; either check
+  failing leaves the password untouched.
+- **Forgot password** is entirely OTP-gated: `POST
+  /auth/password-reset/request` (email) → `POST
+  /auth/password-reset/verify-otp` (flow token + OTP) → `POST
+  /auth/password-reset/confirm` (reset token + new password). The
+  request step always responds identically whether or not the email
+  belongs to an eligible account, so it can't be used to enumerate
+  registered emails. Confirming resets the password and revokes every
+  existing refresh token for the account.
+- TOTP secrets are encrypted at rest (AES-256-GCM, `TOTP_ENCRYPTION_KEY`)
+  and never returned by any endpoint after the one-time setup response.
+- OTP brute-force protection is two separate budgets, deliberately never
+  shared: an **account-level** lockout (`TOTP_MAX_FAILED_ATTEMPTS` /
+  `TOTP_LOCKOUT_DURATION`) for flows that already prove password knowledge
+  (login, setup, change-password), and a **flow-scoped** cap
+  (`PASSWORD_RESET_FLOW_MAX_OTP_ATTEMPTS`) for a single forgot-password
+  attempt — an unauthenticated caller guessing against a reset flow can
+  never lock the real account out of logging in.
 
 ## Development
 

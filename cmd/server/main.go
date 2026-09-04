@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,10 +17,13 @@ import (
 	appauth "github.com/sbezhuk/beebase-auth-service/internal/application/auth"
 	"github.com/sbezhuk/beebase-auth-service/internal/config"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/jwtauth"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/mediaclient"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/password"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/postgres"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/totpsecret"
 	repopostgres "github.com/sbezhuk/beebase-auth-service/internal/repository/postgres"
 	authhttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http/auth"
+	profilehttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http/profile"
 
 	"github.com/sbezhuk/beebase-common/authmw"
 	"github.com/sbezhuk/beebase-common/httpx"
@@ -74,17 +78,45 @@ func run() error {
 		return fmt.Errorf("build JWKS handler: %w", err)
 	}
 
+	totpKey, err := base64.StdEncoding.DecodeString(cfg.TOTPEncryptionKey)
+	if err != nil {
+		return fmt.Errorf("decode TOTP_ENCRYPTION_KEY: %w", err)
+	}
+	totpCipher, err := totpsecret.NewCipher(totpKey)
+	if err != nil {
+		return fmt.Errorf("build totp cipher: %w", err)
+	}
+
 	userRepo := repopostgres.NewUserRepository(db)
 	refreshTokenRepo := repopostgres.NewRefreshTokenRepository(db)
+	credentialRepo := repopostgres.NewTwoFactorCredentialRepository(db)
+	loginChallengeRepo := repopostgres.NewLoginChallengeRepository(db)
+	passwordResetFlowRepo := repopostgres.NewPasswordResetFlowRepository(db)
 	hasher := password.NewBcryptHasher(0)
 	tokenIssuer := jwtauth.NewIssuer(privateKey, kid, cfg.AccessTokenTTL)
+	mediaClient := mediaclient.New(cfg.MediaServiceURL)
 
 	// auth-service verifies its own tokens (for /auth/me) directly against
 	// the public key it already holds in memory, with no JWKS round trip -
 	// unlike every other service, which fetches this over HTTP.
 	tokenVerifier := authmw.NewVerifierFromPublicKey(publicKey)
 
-	authService := appauth.NewService(userRepo, refreshTokenRepo, hasher, tokenIssuer, cfg.RefreshTokenTTL)
+	security := appauth.SecurityConfig{
+		RefreshTTL:              cfg.RefreshTokenTTL,
+		SetupTokenTTL:           cfg.TOTPSetupTokenTTL,
+		LoginChallengeTTL:       cfg.LoginChallengeTTL,
+		PasswordResetFlowTTL:    cfg.PasswordResetFlowTTL,
+		PasswordResetTokenTTL:   cfg.PasswordResetTokenTTL,
+		OTPMaxAttempts:          cfg.TOTPMaxFailedAttempts,
+		OTPLockoutDuration:      cfg.TOTPLockoutDuration,
+		ResetFlowMaxOTPAttempts: cfg.PasswordResetFlowMaxOTPAttempts,
+		TOTPIssuer:              cfg.TOTPIssuer,
+	}
+
+	authService := appauth.NewService(
+		userRepo, refreshTokenRepo, credentialRepo, loginChallengeRepo, passwordResetFlowRepo,
+		hasher, tokenIssuer, mediaClient, totpCipher, security,
+	)
 
 	cookieOpts := httpx.CookieOptions{
 		Domain:   cfg.CookieDomain,
@@ -92,8 +124,9 @@ func run() error {
 		SameSite: http.SameSiteLaxMode,
 	}
 	authHandler := authhttp.NewHandler(authService, log, cookieOpts)
+	profileHandler := profilehttp.NewHandler(authService, log)
 
-	router := transporthttp.NewRouter(log, db, authHandler, tokenVerifier, jwksHandler)
+	router := transporthttp.NewRouter(log, db, authHandler, profileHandler, tokenVerifier, jwksHandler)
 
 	srv := server.New(server.Config{
 		Addr:         ":" + cfg.HTTPPort,

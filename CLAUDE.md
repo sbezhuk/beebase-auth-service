@@ -42,11 +42,19 @@ Domain
 ## Current MVP
 
 Authentication:
-- Register
-- Login
+- Register (returns a TOTP setup challenge, not a session)
+- 2FA setup verification (completes registration / an abandoned setup)
+- Login (returns an OTP challenge or a TOTP setup challenge, never a session directly)
+- Login OTP verification
+- Change password (requires current password + OTP)
+- Forgot password (email -> OTP verification -> reset, fully OTP-gated)
 - Refresh
 - Logout
 - Current user
+
+Profile:
+- Get own profile
+- Update own profile (name, avatar)
 
 Apiaries:
 - CRUD

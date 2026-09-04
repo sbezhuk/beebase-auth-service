@@ -83,6 +83,74 @@ func TestUserRepository_GetByID_NotFound(t *testing.T) {
 	}
 }
 
+func TestUserRepository_Update(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	repo := repopostgres.NewUserRepository(tx)
+
+	u := user.New("integration-update@example.com", "hashed-password")
+	if err := repo.Create(ctx, u); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	avatarID := uuid.New()
+	u.UpdateProfile("Jane", "Doe", &avatarID)
+	if err := repo.Update(ctx, u); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got, err := repo.GetByID(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.FirstName != "Jane" || got.LastName != "Doe" {
+		t.Errorf("name = %q %q, want Jane Doe", got.FirstName, got.LastName)
+	}
+	if got.AvatarMediaID == nil || *got.AvatarMediaID != avatarID {
+		t.Errorf("AvatarMediaID = %v, want %v", got.AvatarMediaID, avatarID)
+	}
+
+	// Removing the avatar (nil) must persist as NULL, not be left alone.
+	u.UpdateProfile("Jane", "Doe", nil)
+	if err := repo.Update(ctx, u); err != nil {
+		t.Fatalf("Update (remove avatar): %v", err)
+	}
+	got, err = repo.GetByID(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("GetByID after removing avatar: %v", err)
+	}
+	if got.AvatarMediaID != nil {
+		t.Errorf("AvatarMediaID = %v, want nil after removal", got.AvatarMediaID)
+	}
+}
+
+func TestUserRepository_Update_NotFound(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	repo := repopostgres.NewUserRepository(tx)
+
+	u := user.New("integration-update-missing@example.com", "hashed-password")
+	// Deliberately never created.
+	err = repo.Update(ctx, u)
+	if !errors.Is(err, user.ErrNotFound) {
+		t.Fatalf("Update for unknown user: got %v, want ErrNotFound", err)
+	}
+}
+
 // TestUserRepository_DuplicateEmail verifies the repository translates a
 // unique-constraint violation into the domain's ErrEmailTaken. The second
 // insert attempt runs inside a SAVEPOINT: a failed statement aborts the

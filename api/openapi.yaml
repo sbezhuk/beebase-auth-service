@@ -7,7 +7,7 @@ info:
     only private key in the deployment; every other BeeBase service
     verifies the tokens issued here via /.well-known/jwks.json instead of
     calling this service directly.
-  version: 0.3.0
+  version: 0.5.0
 servers:
   - url: http://localhost:8080
 
@@ -15,7 +15,17 @@ tags:
   - name: system
     description: Liveness and readiness probes.
   - name: auth
-    description: Registration, login, session refresh, logout, and the current user.
+    description: >-
+      Registration, TOTP (Google Authenticator) 2FA setup and login
+      verification, password change, forgot-password recovery, session
+      refresh, logout, and the current user. Credentials alone never
+      complete registration, a login, a password change, or a password
+      recovery — a valid TOTP code is always also required.
+  - name: profile
+    description: >-
+      Reading and editing the authenticated user's own profile (name and
+      avatar). Always scoped to the caller — there is no way to target
+      another user's profile.
   - name: keys
     description: Public key distribution for other services to verify access tokens.
 
@@ -75,8 +85,14 @@ paths:
       tags: [auth]
       summary: Register a new account
       description: >
-        Creates a user and returns an established session, so a client can
-        register and immediately act as that user without a separate login.
+        Creates a user and returns a TOTP setup challenge — never a
+        session. Registration is not complete until POST
+        /api/v1/auth/2fa/setup/verify succeeds with a valid code for the
+        returned secret/otpauth_uri. An email that's already registered
+        always conflicts (409), even if that account never finished 2FA
+        setup — nothing about this endpoint can overwrite an existing
+        account's password; use POST /api/v1/auth/login instead to resume
+        an abandoned setup (it already requires the current password).
       requestBody:
         required: true
         content:
@@ -84,13 +100,10 @@ paths:
             schema: { $ref: "#/components/schemas/RegisterRequest" }
       responses:
         "201":
-          description: Account created; session established.
-          headers:
-            Set-Cookie:
-              $ref: "#/components/headers/RefreshTokenCookie"
+          description: Account created; TOTP setup challenge issued.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/SessionResponse" }
+              schema: { $ref: "#/components/schemas/TOTPSetupResponse" }
         "400":
           description: Request failed validation.
           content:
@@ -102,10 +115,67 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  /api/v1/auth/2fa/setup/verify:
+    post:
+      tags: [auth]
+      summary: Complete a pending TOTP setup
+      description: >
+        Verifies code against the secret issued alongside setup_token (by
+        POST /api/v1/auth/register, or by POST /api/v1/auth/login when an
+        account's 2FA setup was never completed). On success the
+        credential becomes enabled and a full session is issued — this is
+        the only way a pending setup ever turns into "registration
+        complete." setup_token is single-use: it stops working the moment
+        this call is verified successfully, or once a newer setup
+        challenge for the same account has replaced it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetupVerifyRequest" }
+      responses:
+        "200":
+          description: 2FA enabled; session established.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/RefreshTokenCookie"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "400":
+          description: Request failed validation (missing/malformed setup_token or otp).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: >
+            code totp_setup_token_invalid (unknown/expired/superseded
+            setup_token), otp_invalid (wrong code), or otp_locked (too
+            many failed attempts on this account — see
+            TOTP_MAX_FAILED_ATTEMPTS).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "429":
+          description: code otp_locked. Same meaning as the 401 case above.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
   /api/v1/auth/login:
     post:
       tags: [auth]
       summary: Log in with email and password
+      description: >
+        Never issues a session directly. On valid credentials, returns
+        either an OTP challenge (LoginOtpRequiredResponse, status
+        "otp_required" — the account already has 2FA enabled; finish with
+        POST /api/v1/auth/login/verify-otp) or a fresh TOTP setup
+        challenge (TOTPSetupResponse, status "totp_setup_required" — the
+        account never completed 2FA setup; finish with POST
+        /api/v1/auth/2fa/setup/verify). The response body's shape is
+        determined by its "status" field; both are documented as
+        alternatives on the 200 response below.
       requestBody:
         required: true
         content:
@@ -113,13 +183,15 @@ paths:
             schema: { $ref: "#/components/schemas/LoginRequest" }
       responses:
         "200":
-          description: Session established.
-          headers:
-            Set-Cookie:
-              $ref: "#/components/headers/RefreshTokenCookie"
+          description: >-
+            Either an OTP challenge or a TOTP setup challenge — see the
+            operation description. Never a SessionResponse.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/SessionResponse" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/LoginOtpRequiredResponse"
+                  - $ref: "#/components/schemas/TOTPSetupResponse"
         "400":
           description: Request failed validation.
           content:
@@ -132,6 +204,201 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/auth/login/verify-otp:
+    post:
+      tags: [auth]
+      summary: Complete a login begun by POST /api/v1/auth/login
+      description: >
+        Verifies code against the challenge identified by
+        challenge_token. On success the challenge is consumed (single-use)
+        and a full session is issued.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginVerifyOtpRequest" }
+      responses:
+        "200":
+          description: Session established.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/RefreshTokenCookie"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "400":
+          description: Request failed validation (missing/malformed challenge_token or otp).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: >
+            code login_challenge_invalid (unknown/expired/already-used
+            challenge_token), otp_invalid (wrong code), or otp_locked (too
+            many failed attempts on this account).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "429":
+          description: code otp_locked. Same meaning as the 401 case above.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/auth/change-password:
+    post:
+      tags: [auth]
+      summary: Change the authenticated user's password
+      description: >
+        Requires both the current password and a valid OTP; knowing the
+        current password alone is never sufficient. Nothing is persisted
+        if either check fails. On success, every refresh token belonging
+        to the account is revoked (defense-in-depth, since this is a
+        credential-security event) — the caller's own current session
+        should re-authenticate afterward.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangePasswordRequest" }
+      responses:
+        "204":
+          description: Password changed; existing sessions revoked.
+        "400":
+          description: >
+            Request failed validation, including new_password not
+            matching the existing password policy or a malformed otp.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: >
+            No Authorization header (code missing_authorization), an
+            invalid/expired access token (code invalid_access_token),
+            code current_password_invalid, code otp_invalid, or code
+            otp_locked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "429":
+          description: code otp_locked. Same meaning as the 401 case above.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/auth/password-reset/request:
+    post:
+      tags: [auth]
+      summary: Start a forgot-password flow
+      description: >
+        Always succeeds with an identical response shape, whether or not
+        email belongs to an account that's eligible for recovery (exists
+        and has 2FA enabled) — this endpoint can never be used to
+        enumerate registered emails. The returned flow_token is required
+        by the next step but is not, by itself, sufficient to reset
+        anything.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasswordResetRequestRequest" }
+      responses:
+        "200":
+          description: A password-recovery flow has been created (its usability depends on eligibility, never revealed here).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PasswordResetRequestedResponse" }
+        "400":
+          description: Request failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+
+  /api/v1/auth/password-reset/verify-otp:
+    post:
+      tags: [auth]
+      summary: Verify the OTP step of a forgot-password flow
+      description: >
+        Verifies code against the flow identified by flow_token. An
+        ineligible flow (unknown email, or the account has no enabled 2FA
+        at request time) always fails generically here — never
+        distinguishable from a real account's wrong code. Failures never
+        affect the real account's own login lockout: this flow has its
+        own independent attempt cap
+        (PASSWORD_RESET_FLOW_MAX_OTP_ATTEMPTS). On success, returns a
+        separate, short-lived, single-use reset_token required by the
+        confirm step.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasswordResetVerifyOtpRequest" }
+      responses:
+        "200":
+          description: OTP verified; a reset token has been issued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PasswordResetOtpVerifiedResponse" }
+        "400":
+          description: >
+            Request failed validation (ValidationErrorResponse), or code
+            password_reset_flow_invalid — unknown/expired/consumed/
+            already-verified flow_token (plain ErrorResponse, no fields).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: code otp_invalid (wrong code).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "429":
+          description: >
+            code otp_locked — this flow's own attempt cap is exhausted;
+            request a new flow via POST /api/v1/auth/password-reset/request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/auth/password-reset/confirm:
+    post:
+      tags: [auth]
+      summary: Complete a forgot-password flow with a new password
+      description: >
+        Requires reset_token from a prior successful call to
+        /api/v1/auth/password-reset/verify-otp — this endpoint cannot be
+        reached by skipping the OTP step, since a flow with no verified
+        OTP never has a reset_token to present. reset_token is
+        short-lived and single-use. On success, the password is changed
+        and every refresh token belonging to the account is revoked.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasswordResetConfirmRequest" }
+      responses:
+        "204":
+          description: Password reset; existing sessions revoked.
+        "400":
+          description: >
+            Request failed validation, including new_password/
+            confirm_password mismatch or policy violation
+            (ValidationErrorResponse), or code
+            password_reset_token_invalid — unknown/expired/consumed/
+            not-yet-OTP-verified reset_token (plain ErrorResponse, no
+            fields).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/ErrorResponse"
 
   /api/v1/auth/refresh:
     post:
@@ -208,6 +475,65 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  /api/v1/profile:
+    get:
+      tags: [profile]
+      summary: Get the authenticated user's own profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The authenticated user's profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileResponse" }
+        "401":
+          description: >
+            No Authorization header (code missing_authorization), or an
+            invalid/expired access token (code invalid_access_token).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    put:
+      tags: [profile]
+      summary: Update the authenticated user's own profile
+      description: >
+        Always operates on the caller's own profile, identified from the
+        verified access token — there is no request field that could
+        target another user's profile. firstName and lastName are always
+        replaced. avatar is optional: omit it (or send it as null) to
+        leave the current avatar untouched, send "" to remove it, or send
+        an already-uploaded media-service id to replace it — that id's
+        ownership is verified against media-service before it's stored.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateProfileRequest" }
+      responses:
+        "200":
+          description: The updated profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileResponse" }
+        "400":
+          description: >
+            Request failed validation, including an avatar id that
+            doesn't belong to the caller (code avatar_not_found, under
+            the "avatar" field).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: >
+            No Authorization header (code missing_authorization), or an
+            invalid/expired access token (code invalid_access_token).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -242,6 +568,36 @@ components:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
         created_at: { type: string, format: date-time }
+
+    ProfileResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        firstName: { type: string }
+        lastName: { type: string }
+        avatar:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            The id of an already-uploaded media-service file, or null if
+            the profile has no avatar.
+
+    UpdateProfileRequest:
+      type: object
+      required: [firstName, lastName]
+      properties:
+        firstName: { type: string, minLength: 1, maxLength: 100 }
+        lastName: { type: string, minLength: 1, maxLength: 100 }
+        avatar:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            Omit (or send null) to leave the current avatar untouched;
+            send "" to remove it; send an already-uploaded media-service
+            id to replace it.
 
     SessionResponse:
       type: object
@@ -290,6 +646,129 @@ components:
         email: { type: string, format: email }
         password: { type: string }
 
+    TOTPSetupResponse:
+      type: object
+      description: >-
+        Issued by /register, and by /login when an account's 2FA setup
+        was never completed. secret and otpauth_uri are returned only at
+        this one point — once a credential is enabled, no endpoint ever
+        exposes either again.
+      properties:
+        status:
+          type: string
+          enum: [totp_setup_required]
+        setup_token:
+          type: string
+          description: >-
+            Single-use token identifying this setup challenge. Present
+            to POST /api/v1/auth/2fa/setup/verify along with a valid code.
+        otpauth_uri:
+          type: string
+          description: >-
+            Standard otpauth:// URI, ready to render as a QR code for
+            Google Authenticator (or any compatible app) to scan.
+          example: otpauth://totp/BeeBase:you@example.com?secret=JBSWY3DPEHPK3PXP&issuer=BeeBase
+        secret:
+          type: string
+          description: Base32-encoded TOTP secret, for manual entry as a fallback to scanning the QR code.
+          example: JBSWY3DPEHPK3PXP
+        expires_at:
+          type: integer
+          format: int64
+          description: Unix timestamp (seconds) this setup challenge expires at (TOTP_SETUP_TOKEN_TTL, 15m by default).
+
+    LoginOtpRequiredResponse:
+      type: object
+      description: Issued by /login when the account already has 2FA enabled.
+      properties:
+        status:
+          type: string
+          enum: [otp_required]
+        challenge_token:
+          type: string
+          description: >-
+            Single-use token identifying this login attempt. Present to
+            POST /api/v1/auth/login/verify-otp along with a valid code.
+        expires_at:
+          type: integer
+          format: int64
+          description: Unix timestamp (seconds) this challenge expires at (LOGIN_CHALLENGE_TTL, 5m by default).
+
+    SetupVerifyRequest:
+      type: object
+      required: [setup_token, otp]
+      properties:
+        setup_token: { type: string }
+        otp: { type: string, pattern: "^[0-9]{6}$", example: "123456" }
+
+    LoginVerifyOtpRequest:
+      type: object
+      required: [challenge_token, otp]
+      properties:
+        challenge_token: { type: string }
+        otp: { type: string, pattern: "^[0-9]{6}$", example: "123456" }
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password, otp]
+      properties:
+        current_password: { type: string }
+        new_password: { type: string, minLength: 8 }
+        otp: { type: string, pattern: "^[0-9]{6}$", example: "123456" }
+
+    PasswordResetRequestRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+
+    PasswordResetRequestedResponse:
+      type: object
+      description: >-
+        Response shape is always identical, regardless of whether email
+        belonged to an account eligible for recovery — see the operation
+        description on POST /api/v1/auth/password-reset/request.
+      properties:
+        flow_token:
+          type: string
+          description: >-
+            Present to POST /api/v1/auth/password-reset/verify-otp along
+            with a valid code. Not, by itself, sufficient to reset a
+            password.
+        expires_at:
+          type: integer
+          format: int64
+          description: Unix timestamp (seconds) this flow expires at (PASSWORD_RESET_FLOW_TTL, 10m by default).
+
+    PasswordResetVerifyOtpRequest:
+      type: object
+      required: [flow_token, otp]
+      properties:
+        flow_token: { type: string }
+        otp: { type: string, pattern: "^[0-9]{6}$", example: "123456" }
+
+    PasswordResetOtpVerifiedResponse:
+      type: object
+      properties:
+        reset_token:
+          type: string
+          description: >-
+            Single-use token proving the OTP step succeeded for this
+            flow. Present to POST /api/v1/auth/password-reset/confirm
+            along with the new password.
+        expires_at:
+          type: integer
+          format: int64
+          description: Unix timestamp (seconds) reset_token expires at (PASSWORD_RESET_TOKEN_TTL, 10m by default).
+
+    PasswordResetConfirmRequest:
+      type: object
+      required: [reset_token, new_password, confirm_password]
+      properties:
+        reset_token: { type: string }
+        new_password: { type: string, minLength: 8 }
+        confirm_password: { type: string, minLength: 8 }
+
     ErrorResponse:
       type: object
       description: >
@@ -302,12 +781,23 @@ components:
           properties:
             code:
               type: string
-              description: One of a fixed set of error codes returned by this API.
+              description: >-
+                One of a fixed set of error codes returned by this API.
+                user_not_found is also returned by GET/PUT /api/v1/profile
+                for the (practically impossible) case of a verified access
+                token whose user no longer exists.
               enum:
                 - email_taken
                 - user_not_found
                 - invalid_credentials
                 - invalid_refresh_token
+                - otp_invalid
+                - otp_locked
+                - totp_setup_token_invalid
+                - login_challenge_invalid
+                - current_password_invalid
+                - password_reset_flow_invalid
+                - password_reset_token_invalid
                 - missing_authorization
                 - invalid_access_token
                 - invalid_body
@@ -335,4 +825,18 @@ components:
                   - email_invalid
                   - password_required
                   - password_too_short
+                  - otp_required
+                  - otp_invalid_format
+                  - setup_token_required
+                  - challenge_token_required
+                  - current_password_required
+                  - confirm_password_mismatch
+                  - flow_token_required
+                  - reset_token_required
+                  - first_name_required
+                  - first_name_too_long
+                  - last_name_required
+                  - last_name_too_long
+                  - avatar_invalid
+                  - avatar_not_found
               example: { email: "email_invalid" }

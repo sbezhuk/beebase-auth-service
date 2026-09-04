@@ -47,3 +47,77 @@ func newSessionResponse(s *appauth.Session) SessionResponse {
 func newUserResponse(u *user.User) UserResponse {
 	return UserResponse{ID: u.ID, Email: u.Email, CreatedAt: u.CreatedAt}
 }
+
+// TOTPSetupResponse is returned whenever a TOTP setup challenge has been
+// issued: by Register, and by Login when the account's 2FA setup was never
+// completed. Secret and OtpauthURI are only ever returned at this one
+// point - once a credential is enabled, neither is ever exposed again by
+// any other endpoint.
+type TOTPSetupResponse struct {
+	Status     string `json:"status"`
+	SetupToken string `json:"setup_token"`
+	OtpauthURI string `json:"otpauth_uri"`
+	Secret     string `json:"secret"`
+	ExpiresAt  int64  `json:"expires_at"`
+}
+
+func newTOTPSetupResponseFromRegister(r *appauth.RegisterResult) TOTPSetupResponse {
+	return TOTPSetupResponse{
+		Status:     string(appauth.LoginStatusTOTPSetupRequired),
+		SetupToken: r.SetupToken,
+		OtpauthURI: r.OtpauthURI,
+		Secret:     r.Secret,
+		ExpiresAt:  r.ExpiresAt.Unix(),
+	}
+}
+
+func newTOTPSetupResponseFromLogin(r *appauth.LoginResult) TOTPSetupResponse {
+	return TOTPSetupResponse{
+		Status:     string(r.Status),
+		SetupToken: r.SetupToken,
+		OtpauthURI: r.OtpauthURI,
+		Secret:     r.Secret,
+		ExpiresAt:  r.ExpiresAt.Unix(),
+	}
+}
+
+// LoginOTPRequiredResponse is returned by Login when the account already
+// has 2FA enabled: ChallengeToken, plus a valid OTP, must be presented to
+// LoginVerifyOTP to obtain a session.
+type LoginOTPRequiredResponse struct {
+	Status         string `json:"status"`
+	ChallengeToken string `json:"challenge_token"`
+	ExpiresAt      int64  `json:"expires_at"`
+}
+
+func newLoginOTPRequiredResponse(r *appauth.LoginResult) LoginOTPRequiredResponse {
+	return LoginOTPRequiredResponse{
+		Status:         string(r.Status),
+		ChallengeToken: r.ChallengeToken,
+		ExpiresAt:      r.ExpiresAt.Unix(),
+	}
+}
+
+// PasswordResetRequestedResponse is returned by RequestPasswordReset. Its
+// shape never varies with whether the account was eligible for recovery -
+// see application/auth.Service.RequestPasswordReset.
+type PasswordResetRequestedResponse struct {
+	FlowToken string `json:"flow_token"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+func newPasswordResetRequestedResponse(r *appauth.PasswordResetRequestResult) PasswordResetRequestedResponse {
+	return PasswordResetRequestedResponse{FlowToken: r.FlowToken, ExpiresAt: r.ExpiresAt.Unix()}
+}
+
+// PasswordResetOTPVerifiedResponse is returned by VerifyPasswordResetOTP:
+// ResetToken must be presented to ConfirmPasswordReset to actually change
+// the password.
+type PasswordResetOTPVerifiedResponse struct {
+	ResetToken string `json:"reset_token"`
+	ExpiresAt  int64  `json:"expires_at"`
+}
+
+func newPasswordResetOTPVerifiedResponse(r *appauth.PasswordResetOTPResult) PasswordResetOTPVerifiedResponse {
+	return PasswordResetOTPVerifiedResponse{ResetToken: r.ResetToken, ExpiresAt: r.ExpiresAt.Unix()}
+}
