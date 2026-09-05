@@ -27,6 +27,13 @@ import (
 const (
 	CodeUserNotFound   = "user_not_found"
 	CodeAvatarNotFound = "avatar_not_found"
+
+	// CodeOTPInvalid/CodeOTPLocked intentionally reuse auth-service's own
+	// code strings (see transport/http/auth), since it's the same meaning
+	// from the client's point of view regardless of which handler package
+	// returned it.
+	CodeOTPInvalid = "otp_invalid"
+	CodeOTPLocked  = "otp_locked"
 )
 
 // Handler exposes the profile HTTP endpoints. Every method requires the
@@ -100,14 +107,21 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 // their media), and revokes every session belonging to it. The account to
 // delete is always the caller's own - userID comes from the verified
 // access token, never from the request - so there is no way to target
-// another user's account.
+// another user's account. A valid TOTP code is required in the request
+// body: the account is left untouched if it's missing, malformed, wrong,
+// or the account is currently OTP-locked.
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	userID, token, ok := h.requireAuth(w, r)
 	if !ok {
 		return
 	}
 
-	if err := h.service.DeleteAccount(r.Context(), userID, token); err != nil {
+	var req DeleteAccountRequest
+	if !decodeAndValidate(w, r, &req) {
+		return
+	}
+
+	if err := h.service.DeleteAccount(r.Context(), userID, token, req.OTP); err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
@@ -146,6 +160,10 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusNotFound, CodeUserNotFound, "user not found")
 	case errors.Is(err, appauth.ErrAvatarNotFound):
 		httpx.WriteValidationError(w, map[string]string{"avatar": CodeAvatarNotFound})
+	case errors.Is(err, appauth.ErrOTPInvalid):
+		httpx.WriteError(w, http.StatusUnauthorized, CodeOTPInvalid, "invalid otp code")
+	case errors.Is(err, appauth.ErrOTPLocked):
+		httpx.WriteError(w, http.StatusTooManyRequests, CodeOTPLocked, "too many failed otp attempts")
 	default:
 		httpx.WriteInternalError(w, h.log, err)
 	}

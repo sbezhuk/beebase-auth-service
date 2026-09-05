@@ -248,11 +248,15 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, accessTok
 // DeleteAccount permanently deletes the account identified by userID (as
 // extracted from a verified access token, so a caller can only ever delete
 // their own account - there is no path to targeting anyone else's) and
-// everything owned by it. accessToken is the caller's own access token,
-// forwarded to apiary-service - whose own cascade already reaches every
-// hive, inspection, and their media - and to media-service, to sweep up
-// any media never referenced by an apiary/hive/inspection (e.g. the
-// profile avatar, or an upload that was never attached to anything).
+// everything owned by it. otp must be a currently-valid TOTP for the
+// account's enabled credential - knowing a valid access token alone is
+// never sufficient to trigger so destructive an operation, mirroring
+// ChangePassword's same "prove it's really you" gate. Nothing is deleted
+// unless that check succeeds. accessToken is the caller's own access
+// token, forwarded to apiary-service - whose own cascade already reaches
+// every hive, inspection, and their media - and to media-service, to
+// sweep up any media never referenced by an apiary/hive/inspection (e.g.
+// the profile avatar, or an upload that was never attached to anything).
 //
 // As with every other cascading delete in this project (see
 // application/apiary.Service.Delete), this is not a distributed
@@ -265,8 +269,25 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, accessTok
 // two_factor_credentials, login_challenges, and password_reset_flows all
 // cascade from users via their own ON DELETE CASCADE foreign keys (see
 // user.Repository.Delete).
-func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID, accessToken string) error {
+func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID, accessToken, otp string) error {
 	if _, err := s.users.GetByID(ctx, userID); err != nil {
+		return err
+	}
+
+	cred, err := s.credentials.GetByUserID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, totpdomain.ErrNotFound) {
+			// Reaching an authenticated endpoint without an enabled
+			// credential shouldn't be possible - a session can only be
+			// issued via SetupVerifyOTP, LoginVerifyOTP, or a Refresh
+			// descending from one of those - but fail closed rather than
+			// panic if it somehow happens.
+			return ErrOTPInvalid
+		}
+		return err
+	}
+
+	if err := s.verifyOTP(ctx, cred, otp); err != nil {
 		return err
 	}
 

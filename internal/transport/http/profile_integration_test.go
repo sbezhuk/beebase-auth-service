@@ -170,21 +170,23 @@ func TestProfileFlow_UpdateWithMissingNameIsRejected(t *testing.T) {
 	}
 }
 
-// TestProfileFlow_DeleteAccount is DeleteAccount's end-to-end proof: after
-// a successful DELETE /api/v1/profile, the account itself is gone (even
-// the caller's own still-cryptographically-valid access token can no
-// longer resolve to a user) and every session is revoked - the refresh
-// token cookie the same client jar holds from registration can no longer
-// mint a new access token, proving the local user row's ON DELETE CASCADE
-// actually reached refresh_tokens through the real schema, not just a
-// fake in a unit test.
+// TestProfileFlow_DeleteAccount is DeleteAccount's end-to-end proof: given
+// a valid TOTP code, DELETE /api/v1/profile succeeds, the account itself
+// is gone (even the caller's own still-cryptographically-valid access
+// token can no longer resolve to a user), and every session is revoked -
+// the refresh token cookie the same client jar holds from registration can
+// no longer mint a new access token, proving the local user row's ON
+// DELETE CASCADE actually reached refresh_tokens through the real schema,
+// not just a fake in a unit test.
 func TestProfileFlow_DeleteAccount(t *testing.T) {
 	srv := newTestServer(t)
 	client := newHTTPClient(t)
 
-	session, _ := registerAndCompleteSetup(t, client, srv, "delete-account@example.com", "supersecret")
+	session, secret := registerAndCompleteSetup(t, client, srv, "delete-account@example.com", "supersecret")
 
-	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, nil)
+	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, map[string]string{
+		"otp": genNextCode(t, secret),
+	})
 	if delResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete account: status = %d, want %d", delResp.StatusCode, http.StatusNoContent)
 	}
@@ -200,8 +202,12 @@ func TestProfileFlow_DeleteAccount(t *testing.T) {
 	}
 
 	// Retrying the delete (e.g. a second tab, or a client retry after a
-	// dropped response) reports not found, not a silent second success.
-	delResp2 := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, nil)
+	// dropped response) reports not found, not a silent second success -
+	// the otp's own validity doesn't matter once the account is already
+	// gone, since the account lookup fails first.
+	delResp2 := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, map[string]string{
+		"otp": "000000",
+	})
 	if delResp2.StatusCode != http.StatusNotFound {
 		t.Fatalf("delete account again: status = %d, want %d", delResp2.StatusCode, http.StatusNotFound)
 	}
@@ -223,6 +229,49 @@ func TestProfileFlow_DeleteAccountWithoutTokenIsUnauthorized(t *testing.T) {
 	}
 }
 
+// TestProfileFlow_DeleteAccountWithWrongOtpKeepsAccountIntact proves
+// knowing a valid access token is never sufficient on its own: a wrong
+// TOTP code must reject the request and leave the account fully usable
+// afterward.
+func TestProfileFlow_DeleteAccountWithWrongOtpKeepsAccountIntact(t *testing.T) {
+	srv := newTestServer(t)
+	client := newHTTPClient(t)
+
+	session, _ := registerAndCompleteSetup(t, client, srv, "delete-wrong-otp@example.com", "supersecret")
+
+	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, map[string]string{
+		"otp": "000000",
+	})
+	if delResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("delete account with wrong otp: status = %d, want %d", delResp.StatusCode, http.StatusUnauthorized)
+	}
+
+	getResp := doProfileRequest(t, http.MethodGet, srv.URL+"/api/v1/profile", session.AccessToken, nil)
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("account should survive a wrong otp: status = %d, want %d", getResp.StatusCode, http.StatusOK)
+	}
+}
+
+// TestProfileFlow_DeleteAccountWithMissingOtpIsRejected proves the otp
+// field is required - an omitted or malformed code never reaches
+// DeleteAccount at all, since request validation rejects it first.
+func TestProfileFlow_DeleteAccountWithMissingOtpIsRejected(t *testing.T) {
+	srv := newTestServer(t)
+	client := newHTTPClient(t)
+
+	session, _ := registerAndCompleteSetup(t, client, srv, "delete-missing-otp@example.com", "supersecret")
+
+	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, map[string]string{})
+	if delResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("delete account with missing otp: status = %d, want %d", delResp.StatusCode, http.StatusBadRequest)
+	}
+
+	getResp := doProfileRequest(t, http.MethodGet, srv.URL+"/api/v1/profile", session.AccessToken, nil)
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("account should survive a missing otp: status = %d, want %d", getResp.StatusCode, http.StatusOK)
+	}
+}
+
 // TestProfileFlow_DeleteAccountDoesNotAffectAnotherUser proves the target
 // is always the caller's own account: there is no way to target another
 // user's account through this endpoint, so deleting one account must leave
@@ -232,10 +281,12 @@ func TestProfileFlow_DeleteAccountDoesNotAffectAnotherUser(t *testing.T) {
 	client1 := newHTTPClient(t)
 	client2 := newHTTPClient(t)
 
-	session1, _ := registerAndCompleteSetup(t, client1, srv, "delete-user-one@example.com", "supersecret")
+	session1, secret1 := registerAndCompleteSetup(t, client1, srv, "delete-user-one@example.com", "supersecret")
 	session2, _ := registerAndCompleteSetup(t, client2, srv, "delete-user-two@example.com", "supersecret")
 
-	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session1.AccessToken, nil)
+	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session1.AccessToken, map[string]string{
+		"otp": genNextCode(t, secret1),
+	})
 	if delResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete user-one's account: status = %d, want %d", delResp.StatusCode, http.StatusNoContent)
 	}
