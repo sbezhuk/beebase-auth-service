@@ -27,10 +27,25 @@ func codeAt(t *testing.T, secret string, at time.Time) string {
 	return code
 }
 
-// TestValidate_RejectsCodeFromTwoPeriodsAgo pins down the boundary of the
-// documented skew tolerance (one period, 30s, either side): a code that's
-// genuinely expired - not just a moment past its own window - must never
-// validate. See BEEB-41.
+// TestValidate_RejectsCodeFromPreviousPeriod is the regression test for
+// BEEB-41: once the server's clock moves into a new 30s period, a code
+// from the period that just ended must stop validating immediately - not
+// linger for one more period. now.Add(-30s) always lands exactly one
+// period-counter behind now, regardless of where "now" falls within its
+// own window (subtracting one full period always decrements the floored
+// counter by exactly one).
+func TestValidate_RejectsCodeFromPreviousPeriod(t *testing.T) {
+	secret := genSecret(t)
+	now := time.Now().UTC()
+	justExpired := codeAt(t, secret, now.Add(-30*time.Second))
+
+	if totp.Validate(justExpired, secret) {
+		t.Fatal("Validate accepted a code from the period that just ended")
+	}
+}
+
+// TestValidate_RejectsCodeFromTwoPeriodsAgo confirms a code well outside
+// its validity period is (still, obviously) rejected.
 func TestValidate_RejectsCodeFromTwoPeriodsAgo(t *testing.T) {
 	secret := genSecret(t)
 	now := time.Now().UTC()
@@ -41,16 +56,18 @@ func TestValidate_RejectsCodeFromTwoPeriodsAgo(t *testing.T) {
 	}
 }
 
-// TestValidate_AcceptsCodeFromPreviousPeriod documents the intended skew
-// tolerance itself (distinct from replay): a code just past its own 30s
-// window still validates once, to tolerate ordinary clock drift/latency.
-func TestValidate_AcceptsCodeFromPreviousPeriod(t *testing.T) {
+// TestValidate_AcceptsCodeFromNextPeriod documents the one remaining,
+// deliberately one-sided tolerance: a code for the period immediately
+// after the current one still validates, for an authenticator whose clock
+// runs slightly fast. This is not what BEEB-41 was about - only a code
+// arriving late (from a period already over) was ever the bug.
+func TestValidate_AcceptsCodeFromNextPeriod(t *testing.T) {
 	secret := genSecret(t)
 	now := time.Now().UTC()
-	justExpired := codeAt(t, secret, now.Add(-30*time.Second))
+	early := codeAt(t, secret, now.Add(30*time.Second))
 
-	if !totp.Validate(justExpired, secret) {
-		t.Fatal("Validate rejected a code still inside the documented skew window")
+	if !totp.Validate(early, secret) {
+		t.Fatal("Validate rejected a code for the immediately-following period")
 	}
 }
 

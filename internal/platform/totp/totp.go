@@ -17,14 +17,16 @@ import (
 // period is how many seconds each TOTP code is valid for.
 const period = 30
 
-// codeSkew allows a code from one period (30s) before or after the current
-// one to still validate, tolerating clock drift between the server and the
-// user's authenticator app. This alone does not bound how long a given code
-// stays usable to a single attempt - callers MUST also enforce the
-// anti-replay check described on ValidateAt (RFC 6238 §5.2), or a captured
-// code stays valid for the whole skew window rather than expiring after
-// first use.
-const codeSkew = 1
+// forwardSkew tolerates a code for the period immediately after the
+// current one, for a user's authenticator whose clock runs slightly fast.
+// There is deliberately no backward equivalent: once the server's clock
+// has moved into a new period, a code from the period that just ended must
+// stop working immediately, not linger for an extra period - see BEEB-41,
+// where a code was still accepted a couple of seconds after a new one had
+// already been generated. Combined with the anti-replay check described on
+// ValidateAt, a code is usable for at most the single moment it's actually
+// current (plus this one-sided allowance), never after.
+const forwardSkew = 1
 
 // GenerateSecret creates a new random TOTP secret and its standard
 // otpauth:// URI (for a client to render as a QR code or accept as manual
@@ -59,25 +61,23 @@ func Validate(code, secretBase32 string) bool {
 }
 
 // ValidateAt reports whether code is a valid TOTP for secretBase32 at time
-// t, allowing for a small window of clock skew. When ok, matchedCounter is
-// the RFC 6238 time-step counter the code validated against.
+// t: the current period's code, or the very next period's (forwardSkew).
+// A code from a period that has already ended is never valid, no matter
+// how recently it ended. When ok, matchedCounter is the RFC 6238 time-step
+// counter the code validated against.
 //
 // Callers MUST reject a code whose matchedCounter is less than or equal to
 // the counter of a code this credential has already accepted (see
 // domain/totp.Credential.IsCodeConsumed) and, on acceptance, record it
-// (Credential.MarkCodeUsed/RecordSuccess). Without that check, the skew
-// window above means a code an attacker captured (e.g. by shoulder-surfing
-// or intercepting it in transit) stays usable for up to one extra period
-// after the legitimate user has already used it - RFC 6238 §5.2 requires
-// servers to prohibit exactly this.
+// (Credential.MarkCodeUsed/RecordSuccess) - otherwise a code an attacker
+// captured (e.g. by shoulder-surfing or intercepting it in transit) stays
+// usable for a second attempt even within its own single valid period,
+// which RFC 6238 §5.2 requires servers to prohibit.
 func ValidateAt(code, secretBase32 string, t time.Time) (ok bool, matchedCounter int64) {
 	current := t.Unix() / period
 
-	for i := int64(-codeSkew); i <= codeSkew; i++ {
+	for i := int64(0); i <= forwardSkew; i++ {
 		counter := current + i
-		if counter < 0 {
-			continue
-		}
 		match, err := hotp.ValidateCustom(code, uint64(counter), secretBase32, hotp.ValidateOpts{
 			Digits:    otp.DigitsSix,
 			Algorithm: otp.AlgorithmSHA1,
