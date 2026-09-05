@@ -52,6 +52,7 @@ type Service struct {
 	hasher             PasswordHasher
 	issuer             AccessTokenIssuer
 	media              MediaClient
+	apiaries           ApiaryCascadeDeleter
 	cipher             *totpsecret.Cipher
 	security           SecurityConfig
 }
@@ -66,6 +67,7 @@ func NewService(
 	hasher PasswordHasher,
 	issuer AccessTokenIssuer,
 	media MediaClient,
+	apiaries ApiaryCascadeDeleter,
 	cipher *totpsecret.Cipher,
 	security SecurityConfig,
 ) *Service {
@@ -78,6 +80,7 @@ func NewService(
 		hasher:             hasher,
 		issuer:             issuer,
 		media:              media,
+		apiaries:           apiaries,
 		cipher:             cipher,
 		security:           security,
 	}
@@ -240,6 +243,42 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, accessTok
 	}
 
 	return u, nil
+}
+
+// DeleteAccount permanently deletes the account identified by userID (as
+// extracted from a verified access token, so a caller can only ever delete
+// their own account - there is no path to targeting anyone else's) and
+// everything owned by it. accessToken is the caller's own access token,
+// forwarded to apiary-service - whose own cascade already reaches every
+// hive, inspection, and their media - and to media-service, to sweep up
+// any media never referenced by an apiary/hive/inspection (e.g. the
+// profile avatar, or an upload that was never attached to anything).
+//
+// As with every other cascading delete in this project (see
+// application/apiary.Service.Delete), this is not a distributed
+// transaction: if a downstream call fails, DeleteAccount stops and returns
+// the error, leaving the account and everything not yet deleted fully
+// intact - there is no partially-deleted account left behind, only a
+// delete that can be retried. The local user row is always deleted last,
+// once every downstream dependency is gone; that final step is also what
+// revokes every session belonging to the account, since refresh_tokens,
+// two_factor_credentials, login_challenges, and password_reset_flows all
+// cascade from users via their own ON DELETE CASCADE foreign keys (see
+// user.Repository.Delete).
+func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID, accessToken string) error {
+	if _, err := s.users.GetByID(ctx, userID); err != nil {
+		return err
+	}
+
+	if err := s.apiaries.DeleteAllMine(ctx, accessToken); err != nil {
+		return err
+	}
+
+	if err := s.media.DeleteAllByUser(ctx, accessToken); err != nil {
+		return err
+	}
+
+	return s.users.Delete(ctx, userID)
 }
 
 func (s *Service) issueSession(ctx context.Context, u *user.User) (*Session, error) {

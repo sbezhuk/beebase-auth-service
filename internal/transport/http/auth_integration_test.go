@@ -61,6 +61,18 @@ func (s *stubMediaClient) VerifyOwnership(_ context.Context, _ string, ids []uui
 	return nil
 }
 
+func (s *stubMediaClient) DeleteAllByUser(_ context.Context, _ string) error {
+	return nil
+}
+
+// stubApiaryDeleter is an in-memory stand-in for apiary-service, used so
+// these HTTP integration tests don't need a real apiary-service running.
+type stubApiaryDeleter struct{}
+
+func (stubApiaryDeleter) DeleteAllMine(_ context.Context, _ string) error {
+	return nil
+}
+
 // newTestServer wires a full router against a real PostgreSQL database,
 // with every write scoped to a transaction that's rolled back when the
 // test ends, so runs never leave rows behind or collide with each other.
@@ -130,7 +142,7 @@ func newTestServer(t *testing.T, media ...uuid.UUID) *httptest.Server {
 
 	svc := appauth.NewService(
 		userRepo, refreshTokenRepo, credentialRepo, loginChallengeRepo, passwordResetFlowRepo,
-		hasher, issuer, newStubMediaClient(media...), cipher, security,
+		hasher, issuer, newStubMediaClient(media...), stubApiaryDeleter{}, cipher, security,
 	)
 	log := logger.New("development", "error")
 	cookieOpts := httpx.CookieOptions{SameSite: http.SameSiteLaxMode}

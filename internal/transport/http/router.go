@@ -64,6 +64,7 @@ func NewRouter(
 
 		r.Get("/", profileHandler.Get)
 		r.Put("/", profileHandler.Update)
+		r.Delete("/", profileHandler.Delete)
 	})
 
 	return r

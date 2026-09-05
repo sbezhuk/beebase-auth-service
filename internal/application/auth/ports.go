@@ -35,4 +35,19 @@ type MediaClient interface {
 	// else's - indistinguishable, by the same non-leaking convention
 	// user.ErrNotFound already follows).
 	VerifyOwnership(ctx context.Context, accessToken string, ids []uuid.UUID) error
+	// DeleteAllByUser hard-deletes every media item belonging to whoever
+	// presented accessToken. Used only by Service.DeleteAccount, as the
+	// final sweep for media never referenced by any apiary/hive/
+	// inspection - e.g. the profile avatar, or an upload that was never
+	// attached to anything - which the apiary-service cascade
+	// (ApiaryCascadeDeleter) would never reach on its own.
+	DeleteAllByUser(ctx context.Context, accessToken string) error
+}
+
+// ApiaryCascadeDeleter deletes every apiary belonging to whoever presented
+// accessToken - and, transitively, their hives, inspections, and media -
+// in apiary-service, as part of cascading an account delete. It's a port
+// because apiaries live in a different service with its own database.
+type ApiaryCascadeDeleter interface {
+	DeleteAllMine(ctx context.Context, accessToken string) error
 }

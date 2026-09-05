@@ -42,8 +42,14 @@ type Config struct {
 
 	// MediaServiceURL is media-service's base URL. Updating a profile's
 	// avatar asks it, once, to verify the caller actually owns the
-	// referenced media id before it's persisted.
+	// referenced media id before it's persisted. Deleting an account also
+	// asks it to sweep up every media item belonging to the caller.
 	MediaServiceURL string
+
+	// ApiaryServiceURL is apiary-service's base URL. Deleting an account
+	// cascades to every apiary the caller owns (and, transitively, their
+	// hives, inspections, and media).
+	ApiaryServiceURL string
 
 	// TOTPEncryptionKey is a standard-base64-encoded 32-byte AES-256 key
 	// used to encrypt TOTP secrets at rest. Decoding and length validation
@@ -90,7 +96,8 @@ func Load() (*Config, error) {
 		CookieDomain: getEnv("COOKIE_DOMAIN", ""),
 		CookieSecure: getBool("COOKIE_SECURE", env != "development"),
 
-		MediaServiceURL: getEnv("MEDIA_SERVICE_URL", ""),
+		MediaServiceURL:  getEnv("MEDIA_SERVICE_URL", ""),
+		ApiaryServiceURL: getEnv("APIARY_SERVICE_URL", ""),
 
 		TOTPEncryptionKey: getEnv("TOTP_ENCRYPTION_KEY", ""),
 		TOTPIssuer:        getEnv("TOTP_ISSUER", "BeeBase"),
@@ -112,6 +119,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.MediaServiceURL == "" {
 		return nil, fmt.Errorf("config: MEDIA_SERVICE_URL is required")
+	}
+	if cfg.ApiaryServiceURL == "" {
+		return nil, fmt.Errorf("config: APIARY_SERVICE_URL is required")
 	}
 	if cfg.TOTPEncryptionKey == "" {
 		return nil, fmt.Errorf("config: TOTP_ENCRYPTION_KEY is required")

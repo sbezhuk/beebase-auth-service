@@ -95,6 +95,26 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, newResponse(updated))
 }
 
+// Delete handles DELETE /profile. It permanently deletes the caller's own
+// account and everything owned by it (every apiary, hive, inspection, and
+// their media), and revokes every session belonging to it. The account to
+// delete is always the caller's own - userID comes from the verified
+// access token, never from the request - so there is no way to target
+// another user's account.
+func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	userID, token, ok := h.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if err := h.service.DeleteAccount(r.Context(), userID, token); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) requireUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	userID, ok := httpmw.UserIDFromContext(r.Context())
 	if !ok {

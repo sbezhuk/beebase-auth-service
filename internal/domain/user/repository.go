@@ -22,4 +22,11 @@ type Repository interface {
 	// that may ever change PasswordHash - Update (profile fields) never
 	// does. Returns ErrNotFound if id doesn't match an existing row.
 	UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string) error
+	// Delete permanently removes the user row identified by id. Every
+	// refresh token, TOTP credential, login challenge, and password-reset
+	// flow belonging to id is removed along with it via this table's own
+	// ON DELETE CASCADE foreign keys - there is nothing else in this
+	// service's database left to clean up manually. Returns ErrNotFound if
+	// id doesn't match an existing row.
+	Delete(ctx context.Context, id uuid.UUID) error
 }

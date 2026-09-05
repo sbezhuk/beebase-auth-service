@@ -89,7 +89,8 @@ All configuration is via environment variables (see
 | `JWT_PRIVATE_KEY`           | *(required)*                 | Base64-encoded Ed25519 private key (`make keygen`) |
 | `ACCESS_TOKEN_TTL`          | `15m`                        | Access token lifetime                      |
 | `REFRESH_TOKEN_TTL`         | `720h` (30 days)             | Refresh token lifetime                     |
-| `MEDIA_SERVICE_URL`         | *(required)*                 | media-service's base URL, used to verify ownership of a profile's avatar |
+| `MEDIA_SERVICE_URL`         | *(required)*                 | media-service's base URL, used to verify ownership of a profile's avatar and, on account deletion, to sweep up the caller's remaining media |
+| `APIARY_SERVICE_URL`        | *(required)*                 | apiary-service's base URL, used on account deletion to cascade every apiary the caller owns |
 | `TOTP_ENCRYPTION_KEY`       | *(required)*                 | Base64-encoded 32-byte AES-256 key encrypting TOTP secrets at rest (`openssl rand -base64 32`) |
 | `TOTP_ISSUER`               | `BeeBase`                    | Label shown in a user's authenticator app |
 | `TOTP_SETUP_TOKEN_TTL`      | `15m`                        | How long a pending 2FA setup challenge stays valid |

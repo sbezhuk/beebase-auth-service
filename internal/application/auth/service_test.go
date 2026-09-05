@@ -112,6 +112,20 @@ func (f *fakeUserRepo) UpdatePassword(_ context.Context, id uuid.UUID, passwordH
 	return nil
 }
 
+func (f *fakeUserRepo) Delete(_ context.Context, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	u, ok := f.byID[id]
+	if !ok {
+		return user.ErrNotFound
+	}
+
+	delete(f.byID, id)
+	delete(f.byEmail, u.Email)
+	return nil
+}
+
 type fakeTokenRepo struct {
 	mu     sync.Mutex
 	byID   map[uuid.UUID]*token.RefreshToken
@@ -173,9 +187,12 @@ func (f *fakeTokenRepo) RevokeAllForUser(_ context.Context, userID uuid.UUID) er
 // fakeMediaClient is an in-memory stand-in for media-service. owned holds
 // the set of media ids VerifyOwnership treats as belonging to the caller;
 // anything else is reported as not found, mirroring the real client's
-// non-leaking convention.
+// non-leaking convention. deleteAllErr, when set, makes DeleteAllByUser
+// fail - used to exercise DeleteAccount's abort-on-failure behavior.
 type fakeMediaClient struct {
-	owned map[uuid.UUID]bool
+	owned           map[uuid.UUID]bool
+	deleteAllCalled bool
+	deleteAllErr    error
 }
 
 func newFakeMediaClient(owned ...uuid.UUID) *fakeMediaClient {
@@ -192,6 +209,31 @@ func (f *fakeMediaClient) VerifyOwnership(_ context.Context, _ string, ids []uui
 			return appauth.ErrAvatarNotFound
 		}
 	}
+	return nil
+}
+
+func (f *fakeMediaClient) DeleteAllByUser(_ context.Context, _ string) error {
+	if f.deleteAllErr != nil {
+		return f.deleteAllErr
+	}
+	f.deleteAllCalled = true
+	return nil
+}
+
+// fakeApiaryDeleter is an in-memory stand-in for apiary-service, mirroring
+// application/auth.ApiaryCascadeDeleter. It records whether it was called
+// and can be configured to fail, to exercise DeleteAccount's
+// abort-on-failure behavior.
+type fakeApiaryDeleter struct {
+	called  bool
+	failErr error
+}
+
+func (f *fakeApiaryDeleter) DeleteAllMine(_ context.Context, _ string) error {
+	if f.failErr != nil {
+		return f.failErr
+	}
+	f.called = true
 	return nil
 }
 
@@ -275,7 +317,7 @@ func newTestServiceWithMedia(owned ...uuid.UUID) (*appauth.Service, *fakeUserRep
 	media := newFakeMediaClient(owned...)
 	cipher := newTestCipher()
 
-	svc := appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, media, cipher, newTestSecurityConfig())
+	svc := appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, media, &fakeApiaryDeleter{}, cipher, newTestSecurityConfig())
 	return svc, users, tokens, media
 }
 
@@ -508,7 +550,7 @@ func TestRefresh_ExpiredToken(t *testing.T) {
 	// Negative TTL: any refresh token issued by this service is already expired.
 	security := newTestSecurityConfig()
 	security.RefreshTTL = -time.Hour
-	svc := appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, newFakeMediaClient(), newTestCipher(), security)
+	svc := appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, newFakeMediaClient(), &fakeApiaryDeleter{}, newTestCipher(), security)
 
 	session := mustRegister(t, svc, "bee@example.com", "supersecret")
 
@@ -682,5 +724,109 @@ func TestUpdateProfile_NotFound(t *testing.T) {
 	})
 	if !errors.Is(err, user.ErrNotFound) {
 		t.Fatalf("UpdateProfile for unknown user: got %v, want ErrNotFound", err)
+	}
+}
+
+// newTestServiceForDelete builds a Service backed by fresh, directly
+// inspectable fakes for the two cascade dependencies DeleteAccount drives
+// (apiary-service and media-service), so a test can assert both were
+// actually called - or, for the abort-on-failure tests, that a later one
+// never was.
+func newTestServiceForDelete() (svc *appauth.Service, users *fakeUserRepo, media *fakeMediaClient, apiaries *fakeApiaryDeleter) {
+	users = newFakeUserRepo()
+	tokens := newFakeTokenRepo()
+	credentials := newFakeCredentialRepo()
+	challenges := newFakeLoginChallengeRepo()
+	resetFlows := newFakePasswordResetFlowRepo()
+	hasher := password.NewBcryptHasher(bcrypt.MinCost)
+	issuer := newTestIssuer(time.Minute)
+	media = newFakeMediaClient()
+	apiaries = &fakeApiaryDeleter{}
+	cipher := newTestCipher()
+
+	svc = appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, media, apiaries, cipher, newTestSecurityConfig())
+	return svc, users, media, apiaries
+}
+
+// TestDeleteAccount_Success proves the full cascade: apiary-service is
+// asked to delete every apiary the caller owns (which, transitively,
+// already reaches their hives, inspections, and media), then
+// media-service is swept for anything left over (e.g. an avatar), then
+// the user row itself is removed.
+func TestDeleteAccount_Success(t *testing.T) {
+	svc, _, media, apiaries := newTestServiceForDelete()
+	session := mustRegister(t, svc, "bee@example.com", "supersecret")
+
+	if err := svc.DeleteAccount(context.Background(), session.UserID, "access-token"); err != nil {
+		t.Fatalf("DeleteAccount: %v", err)
+	}
+
+	if !apiaries.called {
+		t.Error("DeleteAccount did not cascade to apiary-service")
+	}
+	if !media.deleteAllCalled {
+		t.Error("DeleteAccount did not sweep media-service")
+	}
+	if _, err := svc.CurrentUser(context.Background(), session.UserID); !errors.Is(err, user.ErrNotFound) {
+		t.Fatalf("CurrentUser after DeleteAccount: got %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteAccount_UnknownUser(t *testing.T) {
+	svc, _, media, apiaries := newTestServiceForDelete()
+
+	if err := svc.DeleteAccount(context.Background(), uuid.New(), "access-token"); !errors.Is(err, user.ErrNotFound) {
+		t.Fatalf("DeleteAccount for unknown user: got %v, want ErrNotFound", err)
+	}
+	if apiaries.called || media.deleteAllCalled {
+		t.Error("DeleteAccount must not call downstream services for a user that doesn't exist")
+	}
+}
+
+// TestDeleteAccount_AbortsOnApiaryCascadeFailure_AccountSurvives is the
+// core abort-on-failure guarantee: if apiary-service can't be reached (or
+// fails for any other reason), the account itself must not be deleted -
+// otherwise its apiaries (and their hives/inspections/media) would be
+// permanently orphaned, unreachable through any API but never actually
+// removed.
+func TestDeleteAccount_AbortsOnApiaryCascadeFailure_AccountSurvives(t *testing.T) {
+	svc, _, media, apiaries := newTestServiceForDelete()
+	session := mustRegister(t, svc, "bee@example.com", "supersecret")
+
+	boom := errors.New("apiary-service unreachable")
+	apiaries.failErr = boom
+
+	if err := svc.DeleteAccount(context.Background(), session.UserID, "access-token"); !errors.Is(err, boom) {
+		t.Fatalf("DeleteAccount: got %v, want %v", err, boom)
+	}
+
+	if media.deleteAllCalled {
+		t.Error("media-service was called even though apiary-service failed first")
+	}
+	if _, err := svc.CurrentUser(context.Background(), session.UserID); err != nil {
+		t.Fatalf("account should survive when apiary-service fails: %v", err)
+	}
+}
+
+// TestDeleteAccount_AbortsOnMediaSweepFailure_AccountSurvives mirrors the
+// previous test for the second cascade step: media-service failing must
+// also stop the account itself from being deleted, even though
+// apiary-service's step already succeeded.
+func TestDeleteAccount_AbortsOnMediaSweepFailure_AccountSurvives(t *testing.T) {
+	svc, _, media, apiaries := newTestServiceForDelete()
+	session := mustRegister(t, svc, "bee@example.com", "supersecret")
+
+	boom := errors.New("media-service unreachable")
+	media.deleteAllErr = boom
+
+	if err := svc.DeleteAccount(context.Background(), session.UserID, "access-token"); !errors.Is(err, boom) {
+		t.Fatalf("DeleteAccount: got %v, want %v", err, boom)
+	}
+
+	if !apiaries.called {
+		t.Error("apiary-service should have already been called before media-service failed")
+	}
+	if _, err := svc.CurrentUser(context.Background(), session.UserID); err != nil {
+		t.Fatalf("account should survive when media-service fails: %v", err)
 	}
 }

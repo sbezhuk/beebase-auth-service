@@ -16,6 +16,7 @@ import (
 
 	appauth "github.com/sbezhuk/beebase-auth-service/internal/application/auth"
 	"github.com/sbezhuk/beebase-auth-service/internal/config"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/apiaryclient"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/jwtauth"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/mediaclient"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/password"
@@ -95,6 +96,7 @@ func run() error {
 	hasher := password.NewBcryptHasher(0)
 	tokenIssuer := jwtauth.NewIssuer(privateKey, kid, cfg.AccessTokenTTL)
 	mediaClient := mediaclient.New(cfg.MediaServiceURL)
+	apiaryClient := apiaryclient.New(cfg.ApiaryServiceURL)
 
 	// auth-service verifies its own tokens (for /auth/me) directly against
 	// the public key it already holds in memory, with no JWKS round trip -
@@ -115,7 +117,7 @@ func run() error {
 
 	authService := appauth.NewService(
 		userRepo, refreshTokenRepo, credentialRepo, loginChallengeRepo, passwordResetFlowRepo,
-		hasher, tokenIssuer, mediaClient, totpCipher, security,
+		hasher, tokenIssuer, mediaClient, apiaryClient, totpCipher, security,
 	)
 
 	cookieOpts := httpx.CookieOptions{

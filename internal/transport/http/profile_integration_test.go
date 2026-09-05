@@ -169,3 +169,79 @@ func TestProfileFlow_UpdateWithMissingNameIsRejected(t *testing.T) {
 		t.Fatalf("update with empty first name: status = %d, want %d", putResp.StatusCode, http.StatusBadRequest)
 	}
 }
+
+// TestProfileFlow_DeleteAccount is DeleteAccount's end-to-end proof: after
+// a successful DELETE /api/v1/profile, the account itself is gone (even
+// the caller's own still-cryptographically-valid access token can no
+// longer resolve to a user) and every session is revoked - the refresh
+// token cookie the same client jar holds from registration can no longer
+// mint a new access token, proving the local user row's ON DELETE CASCADE
+// actually reached refresh_tokens through the real schema, not just a
+// fake in a unit test.
+func TestProfileFlow_DeleteAccount(t *testing.T) {
+	srv := newTestServer(t)
+	client := newHTTPClient(t)
+
+	session, _ := registerAndCompleteSetup(t, client, srv, "delete-account@example.com", "supersecret")
+
+	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, nil)
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete account: status = %d, want %d", delResp.StatusCode, http.StatusNoContent)
+	}
+
+	getResp := doProfileRequest(t, http.MethodGet, srv.URL+"/api/v1/profile", session.AccessToken, nil)
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get profile after delete: status = %d, want %d", getResp.StatusCode, http.StatusNotFound)
+	}
+
+	refreshResp := postJSON(t, client, srv.URL+"/api/v1/auth/refresh", nil)
+	if refreshResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("refresh after delete: status = %d, want %d", refreshResp.StatusCode, http.StatusUnauthorized)
+	}
+
+	// Retrying the delete (e.g. a second tab, or a client retry after a
+	// dropped response) reports not found, not a silent second success.
+	delResp2 := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, nil)
+	if delResp2.StatusCode != http.StatusNotFound {
+		t.Fatalf("delete account again: status = %d, want %d", delResp2.StatusCode, http.StatusNotFound)
+	}
+}
+
+func TestProfileFlow_DeleteAccountWithoutTokenIsUnauthorized(t *testing.T) {
+	srv := newTestServer(t)
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/profile", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete profile: %v", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("delete profile without token: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+// TestProfileFlow_DeleteAccountDoesNotAffectAnotherUser proves the target
+// is always the caller's own account: there is no way to target another
+// user's account through this endpoint, so deleting one account must leave
+// every other account fully intact and usable.
+func TestProfileFlow_DeleteAccountDoesNotAffectAnotherUser(t *testing.T) {
+	srv := newTestServer(t)
+	client1 := newHTTPClient(t)
+	client2 := newHTTPClient(t)
+
+	session1, _ := registerAndCompleteSetup(t, client1, srv, "delete-user-one@example.com", "supersecret")
+	session2, _ := registerAndCompleteSetup(t, client2, srv, "delete-user-two@example.com", "supersecret")
+
+	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session1.AccessToken, nil)
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete user-one's account: status = %d, want %d", delResp.StatusCode, http.StatusNoContent)
+	}
+
+	getResp := doProfileRequest(t, http.MethodGet, srv.URL+"/api/v1/profile", session2.AccessToken, nil)
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("user-two's account should survive user-one's deletion: status = %d, want %d", getResp.StatusCode, http.StatusOK)
+	}
+}

@@ -98,6 +98,25 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, id uuid.UUID, passw
 	return nil
 }
 
+// Delete permanently removes the user row identified by id. The four
+// tables that reference users(id) - refresh_tokens, two_factor_credentials,
+// login_challenges, password_reset_flows - all declare ON DELETE CASCADE,
+// so this single statement is sufficient to remove every row this
+// service's database holds for id.
+func (r *UserRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	const q = `DELETE FROM users WHERE id = $1`
+
+	tag, err := r.db.Exec(ctx, q, id)
+	if err != nil {
+		return fmt.Errorf("postgres: delete user: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return user.ErrNotFound
+	}
+
+	return nil
+}
+
 func (r *UserRepository) scanOne(ctx context.Context, q string, arg any) (*user.User, error) {
 	var u user.User
 

@@ -86,3 +86,31 @@ func (c *Client) VerifyOwnership(ctx context.Context, accessToken string, ids []
 
 	return nil
 }
+
+// DeleteAllByUser implements application/auth.MediaClient by calling
+// media-service's DELETE /api/v1/media/mine - used when the account itself
+// is being deleted, to sweep up any media never referenced by an apiary/
+// hive/inspection (e.g. the profile avatar, or an upload that was never
+// attached to anything).
+func (c *Client) DeleteAllByUser(ctx context.Context, accessToken string) error {
+	u := fmt.Sprintf("%s/api/v1/media/mine", c.baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return fmt.Errorf("mediaclient: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("mediaclient: call media-service: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusNoContent, http.StatusOK:
+		return nil
+	default:
+		return fmt.Errorf("mediaclient: unexpected status %d from media-service", resp.StatusCode)
+	}
+}
