@@ -64,7 +64,7 @@ func TestLoginVerifyOTP_Success(t *testing.T) {
 		t.Fatalf("Login: %v", err)
 	}
 
-	session, err := svc.LoginVerifyOTP(context.Background(), login.ChallengeToken, genCode(t, setup.Secret))
+	session, err := svc.LoginVerifyOTP(context.Background(), login.ChallengeToken, genNextCode(t, setup.Secret))
 	if err != nil {
 		t.Fatalf("LoginVerifyOTP: %v", err)
 	}
@@ -102,12 +102,45 @@ func TestLoginVerifyOTP_ChallengeNotReplayable(t *testing.T) {
 		t.Fatalf("Login: %v", err)
 	}
 
-	code := genCode(t, setup.Secret)
+	code := genNextCode(t, setup.Secret)
 	if _, err := svc.LoginVerifyOTP(context.Background(), login.ChallengeToken, code); err != nil {
 		t.Fatalf("first LoginVerifyOTP: %v", err)
 	}
 	if _, err := svc.LoginVerifyOTP(context.Background(), login.ChallengeToken, code); !errors.Is(err, appauth.ErrChallengeInvalid) {
 		t.Fatalf("replayed LoginVerifyOTP: got %v, want ErrChallengeInvalid", err)
+	}
+}
+
+// TestLoginVerifyOTP_ReplayedCodeRejectedAcrossChallenges is the regression
+// test for BEEB-41: a TOTP code, once accepted, must never authenticate
+// again - even against a brand new login challenge - since it may have
+// been captured by an attacker (shoulder-surfing, network interception)
+// rather than only ever seen by the legitimate user.
+func TestLoginVerifyOTP_ReplayedCodeRejectedAcrossChallenges(t *testing.T) {
+	svc, _, _ := newTestService()
+	setup, err := svc.Register(context.Background(), appauth.RegisterInput{Email: "bee@example.com", Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err := svc.SetupVerifyOTP(context.Background(), setup.SetupToken, genCode(t, setup.Secret)); err != nil {
+		t.Fatalf("SetupVerifyOTP: %v", err)
+	}
+
+	login1, err := svc.Login(context.Background(), appauth.LoginInput{Email: "bee@example.com", Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("Login #1: %v", err)
+	}
+	code := genNextCode(t, setup.Secret)
+	if _, err := svc.LoginVerifyOTP(context.Background(), login1.ChallengeToken, code); err != nil {
+		t.Fatalf("first LoginVerifyOTP: %v", err)
+	}
+
+	login2, err := svc.Login(context.Background(), appauth.LoginInput{Email: "bee@example.com", Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("Login #2: %v", err)
+	}
+	if _, err := svc.LoginVerifyOTP(context.Background(), login2.ChallengeToken, code); !errors.Is(err, appauth.ErrOTPInvalid) {
+		t.Fatalf("replaying the same code against a fresh challenge: got %v, want ErrOTPInvalid", err)
 	}
 }
 
@@ -146,7 +179,7 @@ func TestOTPLockout_AfterMaxAttempts_RejectsSubsequentValidCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Login after exhausting attempts: %v", err)
 	}
-	if _, err := svc.LoginVerifyOTP(context.Background(), login.ChallengeToken, genCode(t, setup.Secret)); !errors.Is(err, appauth.ErrOTPLocked) {
+	if _, err := svc.LoginVerifyOTP(context.Background(), login.ChallengeToken, genNextCode(t, setup.Secret)); !errors.Is(err, appauth.ErrOTPLocked) {
 		t.Fatalf("LoginVerifyOTP with valid code while locked: got %v, want ErrOTPLocked", err)
 	}
 }
@@ -167,7 +200,7 @@ func TestChangePassword_Success_RevokesOldSessions(t *testing.T) {
 	if err := svc.ChangePassword(context.Background(), session.UserID, appauth.ChangePasswordInput{
 		CurrentPassword: "supersecret",
 		NewPassword:     "brandnewpassword",
-		OTP:             genCode(t, setup.Secret),
+		OTP:             genNextCode(t, setup.Secret),
 	}); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}

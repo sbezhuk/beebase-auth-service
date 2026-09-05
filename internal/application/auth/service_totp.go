@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -18,7 +19,8 @@ import (
 // one shared gate for every flow that has already proven password
 // knowledge - setup-verify, login-verify-otp, change-password. Forgot-
 // password deliberately does not go through this: see
-// service_password_reset.go for why its lockout must stay independent.
+// service_password_reset.go for why its lockout must stay independent (it
+// still enforces the anti-replay check below against the same credential).
 func (s *Service) verifyOTP(ctx context.Context, cred *totpdomain.Credential, code string) error {
 	if cred.IsLocked() {
 		return ErrOTPLocked
@@ -29,7 +31,16 @@ func (s *Service) verifyOTP(ctx context.Context, cred *totpdomain.Credential, co
 		return fmt.Errorf("auth: decrypt totp secret: %w", err)
 	}
 
-	if !totp.Validate(code, string(secret)) {
+	ok, counter := totp.ValidateAt(code, string(secret), time.Now().UTC())
+	if ok && cred.IsCodeConsumed(counter) {
+		// Mathematically valid, but already used (or superseded by a later
+		// code) - see BEEB-41: without this, a captured code stays usable
+		// for the rest of the skew window even after the legitimate user
+		// already used it.
+		ok = false
+	}
+
+	if !ok {
 		cred.RecordFailure(s.security.OTPMaxAttempts, s.security.OTPLockoutDuration)
 		if err := s.credentials.Update(ctx, cred); err != nil {
 			return fmt.Errorf("auth: persist otp failure: %w", err)
@@ -40,7 +51,7 @@ func (s *Service) verifyOTP(ctx context.Context, cred *totpdomain.Credential, co
 		return ErrOTPInvalid
 	}
 
-	cred.RecordSuccess()
+	cred.RecordSuccess(counter)
 	if err := s.credentials.Update(ctx, cred); err != nil {
 		return fmt.Errorf("auth: persist otp success: %w", err)
 	}

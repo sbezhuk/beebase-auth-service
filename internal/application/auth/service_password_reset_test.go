@@ -92,7 +92,7 @@ func TestVerifyPasswordResetOTP_Success(t *testing.T) {
 		t.Fatalf("RequestPasswordReset: %v", err)
 	}
 
-	otpResult, err := svc.VerifyPasswordResetOTP(context.Background(), resetResult.FlowToken, genCode(t, setup.Secret))
+	otpResult, err := svc.VerifyPasswordResetOTP(context.Background(), resetResult.FlowToken, genNextCode(t, setup.Secret))
 	if err != nil {
 		t.Fatalf("VerifyPasswordResetOTP: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestVerifyPasswordResetOTP_WrongOTP_DoesNotLockAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if _, err := svc.LoginVerifyOTP(context.Background(), login.ChallengeToken, genCode(t, setup.Secret)); err != nil {
+	if _, err := svc.LoginVerifyOTP(context.Background(), login.ChallengeToken, genNextCode(t, setup.Secret)); err != nil {
 		t.Fatalf("LoginVerifyOTP after forgot-password guesses: got %v, want success (account lockout must be independent)", err)
 	}
 }
@@ -209,7 +209,7 @@ func TestConfirmPasswordReset_Success_SingleUseAndRevokesSessions(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RequestPasswordReset: %v", err)
 	}
-	otpResult, err := svc.VerifyPasswordResetOTP(context.Background(), resetResult.FlowToken, genCode(t, setup.Secret))
+	otpResult, err := svc.VerifyPasswordResetOTP(context.Background(), resetResult.FlowToken, genNextCode(t, setup.Secret))
 	if err != nil {
 		t.Fatalf("VerifyPasswordResetOTP: %v", err)
 	}

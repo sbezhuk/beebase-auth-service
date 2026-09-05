@@ -28,15 +28,16 @@ func (r *TwoFactorCredentialRepository) Create(ctx context.Context, c *totp.Cred
 		INSERT INTO two_factor_credentials (
 			user_id, secret_encrypted, enabled_at,
 			setup_token_hash, setup_token_expires_at,
-			failed_attempts, locked_until, created_at, updated_at
+			failed_attempts, locked_until, last_used_totp_counter,
+			created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
 
 	_, err := r.db.Exec(ctx, q,
 		c.UserID, c.SecretEncrypted, c.EnabledAt,
 		c.SetupTokenHash, c.SetupTokenExpiresAt,
-		c.FailedAttempts, c.LockedUntil, c.CreatedAt, c.UpdatedAt,
+		c.FailedAttempts, c.LockedUntil, c.LastUsedCounter, c.CreatedAt, c.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("postgres: create totp credential: %w", err)
@@ -49,7 +50,8 @@ func (r *TwoFactorCredentialRepository) GetByUserID(ctx context.Context, userID 
 	const q = `
 		SELECT user_id, secret_encrypted, enabled_at,
 			setup_token_hash, setup_token_expires_at,
-			failed_attempts, locked_until, created_at, updated_at
+			failed_attempts, locked_until, last_used_totp_counter,
+			created_at, updated_at
 		FROM two_factor_credentials
 		WHERE user_id = $1
 	`
@@ -60,7 +62,8 @@ func (r *TwoFactorCredentialRepository) GetBySetupTokenHash(ctx context.Context,
 	const q = `
 		SELECT user_id, secret_encrypted, enabled_at,
 			setup_token_hash, setup_token_expires_at,
-			failed_attempts, locked_until, created_at, updated_at
+			failed_attempts, locked_until, last_used_totp_counter,
+			created_at, updated_at
 		FROM two_factor_credentials
 		WHERE setup_token_hash = $1
 	`
@@ -72,14 +75,15 @@ func (r *TwoFactorCredentialRepository) Update(ctx context.Context, c *totp.Cred
 		UPDATE two_factor_credentials
 		SET secret_encrypted = $2, enabled_at = $3,
 			setup_token_hash = $4, setup_token_expires_at = $5,
-			failed_attempts = $6, locked_until = $7, updated_at = $8
+			failed_attempts = $6, locked_until = $7,
+			last_used_totp_counter = $8, updated_at = $9
 		WHERE user_id = $1
 	`
 
 	tag, err := r.db.Exec(ctx, q,
 		c.UserID, c.SecretEncrypted, c.EnabledAt,
 		c.SetupTokenHash, c.SetupTokenExpiresAt,
-		c.FailedAttempts, c.LockedUntil, c.UpdatedAt,
+		c.FailedAttempts, c.LockedUntil, c.LastUsedCounter, c.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("postgres: update totp credential: %w", err)
@@ -97,7 +101,8 @@ func (r *TwoFactorCredentialRepository) scanOne(ctx context.Context, q string, a
 	err := r.db.QueryRow(ctx, q, arg).Scan(
 		&c.UserID, &c.SecretEncrypted, &c.EnabledAt,
 		&c.SetupTokenHash, &c.SetupTokenExpiresAt,
-		&c.FailedAttempts, &c.LockedUntil, &c.CreatedAt, &c.UpdatedAt,
+		&c.FailedAttempts, &c.LockedUntil, &c.LastUsedCounter,
+		&c.CreatedAt, &c.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

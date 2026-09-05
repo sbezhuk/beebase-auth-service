@@ -39,6 +39,16 @@ type Credential struct {
 	FailedAttempts int
 	LockedUntil    *time.Time
 
+	// LastUsedCounter is the RFC 6238 time-step counter of the most
+	// recently accepted TOTP code, or nil if none has ever been accepted.
+	// This is the standard TOTP anti-replay requirement (RFC 6238 §5.2):
+	// without it, a code captured by an attacker stays usable for as long
+	// as the validation skew tolerates it, even after the legitimate user
+	// has already used it. Every flow that validates a code against this
+	// credential - including forgot-password, which otherwise deliberately
+	// bypasses FailedAttempts/LockedUntil - must still advance this.
+	LastUsedCounter *int64
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -118,9 +128,27 @@ func (c *Credential) RecordFailure(maxAttempts int, lockoutFor time.Duration) {
 	c.UpdatedAt = time.Now().UTC()
 }
 
-// RecordSuccess clears the failure counter and any active lockout.
-func (c *Credential) RecordSuccess() {
+// RecordSuccess clears the failure counter and any active lockout, and
+// advances the anti-replay counter to counter (see MarkCodeUsed).
+func (c *Credential) RecordSuccess(counter int64) {
 	c.FailedAttempts = 0
 	c.LockedUntil = nil
+	c.MarkCodeUsed(counter)
+}
+
+// IsCodeConsumed reports whether counter (an RFC 6238 time-step counter a
+// candidate code validated against) has already been used to authenticate,
+// or is older than one that has - either way it must be rejected.
+func (c *Credential) IsCodeConsumed(counter int64) bool {
+	return c.LastUsedCounter != nil && counter <= *c.LastUsedCounter
+}
+
+// MarkCodeUsed records counter as the most recently accepted TOTP step, so
+// it - or any earlier step - can never authenticate again. This must be
+// called for every successful validation, independent of RecordSuccess:
+// forgot-password validates against this same credential but deliberately
+// does not touch FailedAttempts/LockedUntil.
+func (c *Credential) MarkCodeUsed(counter int64) {
+	c.LastUsedCounter = &counter
 	c.UpdatedAt = time.Now().UTC()
 }

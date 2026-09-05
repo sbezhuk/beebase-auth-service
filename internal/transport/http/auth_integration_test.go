@@ -238,6 +238,23 @@ func genCode(t *testing.T, secret string) string {
 	return code
 }
 
+// genNextCode computes the code for the time-step right after the current
+// one - still accepted right now under the server's forward clock-skew
+// tolerance, but a distinct time-step counter from genCode's. Use this for
+// a second real code against the same account within a test: since BEEB-41
+// a counter, once accepted, can never authenticate again, so two genCode
+// calls made moments apart (which would otherwise likely collide on the
+// same 30s step) must not be presented as if a real user generated them
+// separately.
+func genNextCode(t *testing.T, secret string) string {
+	t.Helper()
+	code, err := pquernatotp.GenerateCode(secret, time.Now().UTC().Add(30*time.Second))
+	if err != nil {
+		t.Fatalf("generate totp code: %v", err)
+	}
+	return code
+}
+
 // registerAndCompleteSetup registers email/password, then immediately
 // walks the account through TOTP setup with a correctly-computed code,
 // returning both the session /2fa/setup/verify issues and the account's
@@ -366,7 +383,7 @@ func TestAuthFlow_FullOTPCycle(t *testing.T) {
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/login/verify-otp", map[string]string{
 		"challenge_token": otpRequired.ChallengeToken,
-		"otp":             genCode(t, setup.Secret),
+		"otp":             genNextCode(t, setup.Secret),
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("login/verify-otp: status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -439,7 +456,7 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 	resp = authedPost(srv.URL+"/api/v1/auth/change-password", map[string]string{
 		"current_password": "supersecret",
 		"new_password":     "brandnewpassword",
-		"otp":              genCode(t, secret),
+		"otp":              genNextCode(t, secret),
 	})
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("change-password: status = %d, want %d", resp.StatusCode, http.StatusNoContent)
@@ -488,7 +505,7 @@ func TestAuthFlow_PasswordResetCycle(t *testing.T) {
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/password-reset/verify-otp", map[string]string{
 		"flow_token": requested.FlowToken,
-		"otp":        genCode(t, secret),
+		"otp":        genNextCode(t, secret),
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("password-reset/verify-otp: status = %d, want %d", resp.StatusCode, http.StatusOK)

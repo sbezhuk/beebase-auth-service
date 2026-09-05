@@ -234,7 +234,25 @@ func newTestSecurityConfig() appauth.SecurityConfig {
 // real thing" approach this file already takes for bcrypt and ed25519.
 func genCode(t *testing.T, secret string) string {
 	t.Helper()
-	code, err := pquernatotp.GenerateCode(secret, time.Now().UTC())
+	return genCodeAt(t, secret, time.Now().UTC())
+}
+
+// genNextCode computes the code for the time-step right after the current
+// one. Validate's forward clock-skew tolerance still accepts it right now,
+// but it's a distinct time-step counter from genCode's - use this for a
+// second real validation against the same credential within a test, since
+// BEEB-41's anti-replay fix means a counter, once accepted, can never
+// authenticate again (so two genCode calls made moments apart, which would
+// normally collide on the same 30s step, must not be presented as if a
+// real user generated them separately).
+func genNextCode(t *testing.T, secret string) string {
+	t.Helper()
+	return genCodeAt(t, secret, time.Now().UTC().Add(30*time.Second))
+}
+
+func genCodeAt(t *testing.T, secret string, at time.Time) string {
+	t.Helper()
+	code, err := pquernatotp.GenerateCode(secret, at)
 	if err != nil {
 		t.Fatalf("generate totp code: %v", err)
 	}

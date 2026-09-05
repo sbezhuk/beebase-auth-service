@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -90,7 +91,20 @@ func (s *Service) VerifyPasswordResetOTP(ctx context.Context, flowToken, code st
 			if err != nil {
 				return nil, fmt.Errorf("auth: decrypt totp secret: %w", err)
 			}
-			valid = totp.Validate(code, string(secret))
+			// Anti-replay (see service_totp.go/BEEB-41) applies here too:
+			// a code intercepted during a real login must not also be
+			// usable to hijack a password reset. This is the one thing
+			// this flow does write back to cred - it must never touch
+			// FailedAttempts/LockedUntil (see the flow's own otp_attempts
+			// cap above), but a used code is used account-wide, not just
+			// within this flow.
+			if ok, counter := totp.ValidateAt(code, string(secret), time.Now().UTC()); ok && !cred.IsCodeConsumed(counter) {
+				valid = true
+				cred.MarkCodeUsed(counter)
+				if err := s.credentials.Update(ctx, cred); err != nil {
+					return nil, fmt.Errorf("auth: persist totp anti-replay state: %w", err)
+				}
+			}
 		}
 	}
 
