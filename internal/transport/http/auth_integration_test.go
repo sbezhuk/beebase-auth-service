@@ -12,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,6 +74,44 @@ func (stubApiaryDeleter) DeleteAllMine(_ context.Context, _ string) error {
 	return nil
 }
 
+// stubSessionStore is an in-memory stand-in for *sessionstore.Store, used
+// so these HTTP integration tests don't need a real Redis running. It
+// tracks the one active session id per user the same way the real
+// Redis-backed store does, so RequireAuth's session check still behaves
+// realistically end to end.
+type stubSessionStore struct {
+	mu     sync.Mutex
+	active map[uuid.UUID]uuid.UUID
+}
+
+func newStubSessionStore() *stubSessionStore {
+	return &stubSessionStore{active: map[uuid.UUID]uuid.UUID{}}
+}
+
+func (s *stubSessionStore) Activate(_ context.Context, userID, sessionID uuid.UUID, _ time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.active[userID] = sessionID
+	return nil
+}
+
+func (s *stubSessionStore) Deactivate(_ context.Context, userID uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.active, userID)
+	return nil
+}
+
+func (s *stubSessionStore) IsActive(_ context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, ok := s.active[userID]
+	return ok && current == sessionID, nil
+}
+
 // newTestServer wires a full router against a real PostgreSQL database,
 // with every write scoped to a transaction that's rolled back when the
 // test ends, so runs never leave rows behind or collide with each other.
@@ -112,7 +151,8 @@ func newTestServer(t *testing.T, media ...uuid.UUID) *httptest.Server {
 	}
 	kid := jwtauth.KeyID(pub)
 	issuer := jwtauth.NewIssuer(priv, kid, time.Minute)
-	verifier := authmw.NewVerifierFromPublicKey(pub)
+	sessions := newStubSessionStore()
+	verifier := authmw.NewVerifierFromPublicKey(pub, sessions)
 
 	jwksHandler, err := jwks.NewHandler(pub, kid)
 	if err != nil {
@@ -142,7 +182,7 @@ func newTestServer(t *testing.T, media ...uuid.UUID) *httptest.Server {
 
 	svc := appauth.NewService(
 		userRepo, refreshTokenRepo, credentialRepo, loginChallengeRepo, passwordResetFlowRepo,
-		hasher, issuer, newStubMediaClient(media...), stubApiaryDeleter{}, cipher, security,
+		hasher, issuer, sessions, newStubMediaClient(media...), stubApiaryDeleter{}, cipher, security,
 	)
 	log := logger.New("development", "error")
 	cookieOpts := httpx.CookieOptions{SameSite: http.SameSiteLaxMode}

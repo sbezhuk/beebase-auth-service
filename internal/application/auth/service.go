@@ -51,6 +51,7 @@ type Service struct {
 	passwordResetFlows passwordreset.Repository
 	hasher             PasswordHasher
 	issuer             AccessTokenIssuer
+	sessions           SessionActivator
 	media              MediaClient
 	apiaries           ApiaryCascadeDeleter
 	cipher             *totpsecret.Cipher
@@ -66,6 +67,7 @@ func NewService(
 	passwordResetFlows passwordreset.Repository,
 	hasher PasswordHasher,
 	issuer AccessTokenIssuer,
+	sessions SessionActivator,
 	media MediaClient,
 	apiaries ApiaryCascadeDeleter,
 	cipher *totpsecret.Cipher,
@@ -79,6 +81,7 @@ func NewService(
 		passwordResetFlows: passwordResetFlows,
 		hasher:             hasher,
 		issuer:             issuer,
+		sessions:           sessions,
 		media:              media,
 		apiaries:           apiaries,
 		cipher:             cipher,
@@ -187,9 +190,11 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*Session, error
 	return s.issueSession(ctx, u)
 }
 
-// Logout revokes rawToken. It is idempotent: presenting an unknown or
-// already-revoked token is not an error, since the desired end state
-// (the token can no longer be used) already holds.
+// Logout revokes rawToken and immediately deactivates its session, so the
+// access token issued alongside it also stops being accepted right away
+// rather than lingering until its own expiry. It is idempotent: presenting
+// an unknown or already-revoked token is not an error, since the desired
+// end state (neither token can be used) already holds.
 func (s *Service) Logout(ctx context.Context, rawToken string) error {
 	rt, err := s.refreshTokens.GetByHash(ctx, tokenhash.Hash(rawToken))
 	if err != nil {
@@ -203,7 +208,15 @@ func (s *Service) Logout(ctx context.Context, rawToken string) error {
 		return nil
 	}
 
-	return s.refreshTokens.Revoke(ctx, rt.ID)
+	if err := s.refreshTokens.Revoke(ctx, rt.ID); err != nil {
+		return err
+	}
+
+	if err := s.sessions.Deactivate(ctx, rt.UserID); err != nil {
+		return fmt.Errorf("auth: deactivate session on logout: %w", err)
+	}
+
+	return nil
 }
 
 // CurrentUser returns the user identified by userID, as extracted from a
@@ -302,20 +315,40 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID, accessTok
 	return s.users.Delete(ctx, userID)
 }
 
+// issueSession is the single choke point every login/refresh/setup path
+// goes through to hand out a new session. Only one session may be active
+// per user at a time, so any refresh tokens left over from a prior session
+// are revoked here before the new one is created - mirroring the
+// reuse-detection revocation in Refresh and the security-event revocation
+// in ChangePassword, which already kill a user's whole token family the
+// same way. The new session is then registered with sessions.Activate
+// *before* its access token is minted, so the access token's "sid" claim
+// is guaranteed to already be the one every service's Verifier will find
+// active - immediately superseding whatever access/refresh pair the prior
+// session had, rather than leaving the old access token valid until it
+// naturally expires.
 func (s *Service) issueSession(ctx context.Context, u *user.User) (*Session, error) {
-	accessToken, expiresAt, err := s.issuer.Issue(u.ID)
-	if err != nil {
-		return nil, fmt.Errorf("auth: issue access token: %w", err)
+	if err := s.refreshTokens.RevokeAllForUser(ctx, u.ID); err != nil {
+		return nil, fmt.Errorf("auth: revoke prior sessions: %w", err)
 	}
 
 	rawRefresh, err := tokenhash.Generate()
 	if err != nil {
 		return nil, fmt.Errorf("auth: generate refresh token: %w", err)
 	}
-
 	rt := token.New(u.ID, tokenhash.Hash(rawRefresh), s.security.RefreshTTL)
+
+	if err := s.sessions.Activate(ctx, u.ID, rt.ID, s.security.RefreshTTL); err != nil {
+		return nil, fmt.Errorf("auth: activate session: %w", err)
+	}
+
 	if err := s.refreshTokens.Create(ctx, rt); err != nil {
 		return nil, fmt.Errorf("auth: store refresh token: %w", err)
+	}
+
+	accessToken, expiresAt, err := s.issuer.Issue(u.ID, rt.ID)
+	if err != nil {
+		return nil, fmt.Errorf("auth: issue access token: %w", err)
 	}
 
 	return &Session{

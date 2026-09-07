@@ -140,9 +140,10 @@ func (s *Service) LoginVerifyOTP(ctx context.Context, challengeToken, code strin
 // the account's existing password and in.OTP must be a currently-valid
 // TOTP for its enabled credential - knowing the current password alone is
 // never sufficient. Nothing is persisted unless both checks succeed. On
-// success, every refresh token belonging to the account is revoked as a
-// defense-in-depth measure, since a password change is itself a
-// credential-security event.
+// success, every refresh token belonging to the account is revoked and its
+// session immediately deactivated - so its access token stops being
+// accepted right away too - as a defense-in-depth measure, since a
+// password change is itself a credential-security event.
 func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, in ChangePasswordInput) error {
 	u, err := s.users.GetByID(ctx, userID)
 	if err != nil {
@@ -181,6 +182,10 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, in Chang
 
 	if err := s.refreshTokens.RevokeAllForUser(ctx, userID); err != nil {
 		return fmt.Errorf("auth: revoke sessions after password change: %w", err)
+	}
+
+	if err := s.sessions.Deactivate(ctx, userID); err != nil {
+		return fmt.Errorf("auth: deactivate session after password change: %w", err)
 	}
 
 	return nil

@@ -14,6 +14,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+
+	"github.com/sbezhuk/beebase-common/authmw"
 )
 
 // Issuer signs access tokens with an Ed25519 private key.
@@ -29,16 +31,20 @@ func NewIssuer(priv ed25519.PrivateKey, kid string, ttl time.Duration) *Issuer {
 	return &Issuer{priv: priv, kid: kid, ttl: ttl}
 }
 
-// Issue signs a new access token for userID, returning the token and its
-// expiry time.
-func (i *Issuer) Issue(userID uuid.UUID) (string, time.Time, error) {
+// Issue signs a new access token for userID, scoped to sessionID (so a
+// verifier backed by a session store can reject it the instant that
+// session is superseded), returning the token and its expiry time.
+func (i *Issuer) Issue(userID, sessionID uuid.UUID) (string, time.Time, error) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(i.ttl)
 
-	claims := jwt.RegisteredClaims{
-		Subject:   userID.String(),
-		IssuedAt:  jwt.NewNumericDate(now),
-		ExpiresAt: jwt.NewNumericDate(expiresAt),
+	claims := authmw.AccessClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   userID.String(),
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+		},
+		SessionID: sessionID,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)

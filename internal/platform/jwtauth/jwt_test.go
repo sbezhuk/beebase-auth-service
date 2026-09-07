@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/jwtauth"
+	"github.com/sbezhuk/beebase-common/authmw"
 )
 
 func generateKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
@@ -25,8 +26,9 @@ func TestIssuer_IssuesVerifiableEdDSAToken(t *testing.T) {
 	pub, priv := generateKey(t)
 	issuer := jwtauth.NewIssuer(priv, jwtauth.KeyID(pub), time.Minute)
 	userID := uuid.New()
+	sessionID := uuid.New()
 
-	token, expiresAt, err := issuer.Issue(userID)
+	token, expiresAt, err := issuer.Issue(userID, sessionID)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -37,7 +39,7 @@ func TestIssuer_IssuesVerifiableEdDSAToken(t *testing.T) {
 		t.Fatal("Issue returned an expiry in the past")
 	}
 
-	var claims jwt.RegisteredClaims
+	var claims authmw.AccessClaims
 	parsed, err := jwt.ParseWithClaims(token, &claims, func(tok *jwt.Token) (any, error) {
 		return pub, nil
 	}, jwt.WithValidMethods([]string{"EdDSA"}))
@@ -50,6 +52,9 @@ func TestIssuer_IssuesVerifiableEdDSAToken(t *testing.T) {
 	if claims.Subject != userID.String() {
 		t.Errorf("subject = %q, want %q", claims.Subject, userID.String())
 	}
+	if claims.SessionID != sessionID {
+		t.Errorf("sid claim = %q, want %q", claims.SessionID, sessionID)
+	}
 	if kid, _ := parsed.Header["kid"].(string); kid != jwtauth.KeyID(pub) {
 		t.Errorf("kid header = %q, want %q", kid, jwtauth.KeyID(pub))
 	}
@@ -60,7 +65,7 @@ func TestIssuer_TokenRejectedByWrongPublicKey(t *testing.T) {
 	otherPub, _ := generateKey(t)
 
 	issuer := jwtauth.NewIssuer(priv, "kid", time.Minute)
-	token, _, err := issuer.Issue(uuid.New())
+	token, _, err := issuer.Issue(uuid.New(), uuid.New())
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}

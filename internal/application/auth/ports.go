@@ -16,9 +16,28 @@ type PasswordHasher interface {
 }
 
 // AccessTokenIssuer issues signed access tokens for authenticated users.
-// It's a port so the service doesn't depend on JWT specifically.
+// It's a port so the service doesn't depend on JWT specifically. sessionID
+// is embedded in the token so a verifier can reject it immediately once
+// that session is no longer the user's active one - see SessionActivator.
 type AccessTokenIssuer interface {
-	Issue(userID uuid.UUID) (token string, expiresAt time.Time, err error)
+	Issue(userID, sessionID uuid.UUID) (token string, expiresAt time.Time, err error)
+}
+
+// SessionActivator tracks, in a store shared by every service (not just
+// auth-service), which session is currently the single active one for a
+// user. It's what lets an access token be rejected the instant it's
+// superseded by a newer session, rather than staying valid until its own
+// JWT expiry. It's a port so the service doesn't depend on Redis
+// specifically; satisfied by *sessionstore.Store.
+type SessionActivator interface {
+	// Activate marks sessionID as the only active session for userID,
+	// superseding whatever was active before. ttl should match the
+	// session's own refresh-token TTL.
+	Activate(ctx context.Context, userID, sessionID uuid.UUID, ttl time.Duration) error
+	// Deactivate clears the active-session marker for userID, so its
+	// access token stops being accepted immediately rather than at its
+	// natural expiry.
+	Deactivate(ctx context.Context, userID uuid.UUID) error
 }
 
 // MediaClient is auth-service's dependency on media-service, used solely

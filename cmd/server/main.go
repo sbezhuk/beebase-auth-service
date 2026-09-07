@@ -31,6 +31,7 @@ import (
 	"github.com/sbezhuk/beebase-common/jwks"
 	"github.com/sbezhuk/beebase-common/logger"
 	"github.com/sbezhuk/beebase-common/server"
+	"github.com/sbezhuk/beebase-common/sessionstore"
 
 	transporthttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http"
 )
@@ -67,6 +68,18 @@ func run() error {
 
 	log.Info("connected to database")
 
+	redisConnectCtx, cancelRedisConnect := context.WithTimeout(ctx, cfg.RedisConnectTimeout)
+	redisClient, err := sessionstore.NewRedisClient(redisConnectCtx, cfg.RedisAddr)
+	cancelRedisConnect()
+	if err != nil {
+		return fmt.Errorf("connect to redis: %w", err)
+	}
+	defer redisClient.Close()
+
+	log.Info("connected to redis")
+
+	sessions := sessionstore.NewStore(redisClient)
+
 	privateKey, err := jwtauth.ParsePrivateKey(cfg.JWTPrivateKey)
 	if err != nil {
 		return fmt.Errorf("load JWT private key: %w", err)
@@ -101,7 +114,7 @@ func run() error {
 	// auth-service verifies its own tokens (for /auth/me) directly against
 	// the public key it already holds in memory, with no JWKS round trip -
 	// unlike every other service, which fetches this over HTTP.
-	tokenVerifier := authmw.NewVerifierFromPublicKey(publicKey)
+	tokenVerifier := authmw.NewVerifierFromPublicKey(publicKey, sessions)
 
 	security := appauth.SecurityConfig{
 		RefreshTTL:              cfg.RefreshTokenTTL,
@@ -117,7 +130,7 @@ func run() error {
 
 	authService := appauth.NewService(
 		userRepo, refreshTokenRepo, credentialRepo, loginChallengeRepo, passwordResetFlowRepo,
-		hasher, tokenIssuer, mediaClient, apiaryClient, totpCipher, security,
+		hasher, tokenIssuer, sessions, mediaClient, apiaryClient, totpCipher, security,
 	)
 
 	cookieOpts := httpx.CookieOptions{

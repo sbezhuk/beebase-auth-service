@@ -184,6 +184,42 @@ func (f *fakeTokenRepo) RevokeAllForUser(_ context.Context, userID uuid.UUID) er
 	return nil
 }
 
+// fakeSessionStore is an in-memory stand-in for *sessionstore.Store,
+// tracking the one active session id per user the same way the real
+// Redis-backed store does.
+type fakeSessionStore struct {
+	mu     sync.Mutex
+	active map[uuid.UUID]uuid.UUID
+}
+
+func newFakeSessionStore() *fakeSessionStore {
+	return &fakeSessionStore{active: map[uuid.UUID]uuid.UUID{}}
+}
+
+func (f *fakeSessionStore) Activate(_ context.Context, userID, sessionID uuid.UUID, _ time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.active[userID] = sessionID
+	return nil
+}
+
+func (f *fakeSessionStore) Deactivate(_ context.Context, userID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	delete(f.active, userID)
+	return nil
+}
+
+func (f *fakeSessionStore) IsActive(_ context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	current, ok := f.active[userID]
+	return ok && current == sessionID, nil
+}
+
 // fakeMediaClient is an in-memory stand-in for media-service. owned holds
 // the set of media ids VerifyOwnership treats as belonging to the caller;
 // anything else is reported as not found, mirroring the real client's
@@ -314,10 +350,11 @@ func newTestServiceWithMedia(owned ...uuid.UUID) (*appauth.Service, *fakeUserRep
 	resetFlows := newFakePasswordResetFlowRepo()
 	hasher := password.NewBcryptHasher(bcrypt.MinCost)
 	issuer := newTestIssuer(time.Minute)
+	sessions := newFakeSessionStore()
 	media := newFakeMediaClient(owned...)
 	cipher := newTestCipher()
 
-	svc := appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, media, &fakeApiaryDeleter{}, cipher, newTestSecurityConfig())
+	svc := appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, sessions, media, &fakeApiaryDeleter{}, cipher, newTestSecurityConfig())
 	return svc, users, tokens, media
 }
 
@@ -550,7 +587,7 @@ func TestRefresh_ExpiredToken(t *testing.T) {
 	// Negative TTL: any refresh token issued by this service is already expired.
 	security := newTestSecurityConfig()
 	security.RefreshTTL = -time.Hour
-	svc := appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, newFakeMediaClient(), &fakeApiaryDeleter{}, newTestCipher(), security)
+	svc := appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, newFakeSessionStore(), newFakeMediaClient(), &fakeApiaryDeleter{}, newTestCipher(), security)
 
 	session := mustRegister(t, svc, "bee@example.com", "supersecret")
 
@@ -744,7 +781,7 @@ func newTestServiceForDelete() (svc *appauth.Service, users *fakeUserRepo, media
 	apiaries = &fakeApiaryDeleter{}
 	cipher := newTestCipher()
 
-	svc = appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, media, apiaries, cipher, newTestSecurityConfig())
+	svc = appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, newFakeSessionStore(), media, apiaries, cipher, newTestSecurityConfig())
 	return svc, users, media, apiaries
 }
 

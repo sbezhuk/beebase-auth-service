@@ -76,6 +76,47 @@ func TestLoginVerifyOTP_Success(t *testing.T) {
 	}
 }
 
+// TestLoginVerifyOTP_InvalidatesPriorSession is the regression test for
+// single-session enforcement: a user may only ever have one active session,
+// so logging in again from a second device must silently kill the first
+// device's session rather than letting both live side by side.
+func TestLoginVerifyOTP_InvalidatesPriorSession(t *testing.T) {
+	svc, _, _ := newTestService()
+	setup, err := svc.Register(context.Background(), appauth.RegisterInput{Email: "bee@example.com", Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	first, err := svc.SetupVerifyOTP(context.Background(), setup.SetupToken, genCode(t, setup.Secret))
+	if err != nil {
+		t.Fatalf("SetupVerifyOTP: %v", err)
+	}
+
+	login, err := svc.Login(context.Background(), appauth.LoginInput{Email: "bee@example.com", Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	second, err := svc.LoginVerifyOTP(context.Background(), login.ChallengeToken, genNextCode(t, setup.Secret))
+	if err != nil {
+		t.Fatalf("LoginVerifyOTP: %v", err)
+	}
+	if second.RefreshToken == first.RefreshToken {
+		t.Fatal("second login returned the same refresh token as the first session")
+	}
+
+	// Check the second (only remaining) session works first: presenting the
+	// first session's now-revoked token is itself treated as reuse/theft
+	// evidence (see Refresh) and would additionally nuke the second
+	// session's token too, which would be a false negative for this
+	// specific assertion order.
+	if _, err := svc.Refresh(context.Background(), second.RefreshToken); err != nil {
+		t.Fatalf("refreshing the second (now only) session's token: %v", err)
+	}
+
+	if _, err := svc.Refresh(context.Background(), first.RefreshToken); !errors.Is(err, appauth.ErrInvalidRefreshToken) {
+		t.Fatalf("refreshing first session's token after a second login: got %v, want ErrInvalidRefreshToken", err)
+	}
+}
+
 func TestLoginVerifyOTP_WrongCode_NoSessionIssued(t *testing.T) {
 	svc, _, _ := newTestService()
 	mustRegister(t, svc, "bee@example.com", "supersecret")

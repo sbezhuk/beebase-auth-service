@@ -16,6 +16,17 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   # One-shot job: applies pending migrations, then exits. Kept separate
   # from the app so migrations run exactly once per `docker compose up`,
   # not once per horizontally-scaled app replica.
@@ -41,13 +52,17 @@ services:
     env_file:
       - .env
     environment:
-      # Overrides .env's localhost DSN: within the compose network the
-      # database is reachable at the service name "postgres", not localhost.
+      # Overrides .env's localhost DSN/address: within the compose network
+      # the database and Redis are reachable at their service names, not
+      # localhost.
       DATABASE_URL: postgres://${POSTGRES_USER:-beebase}:${POSTGRES_PASSWORD:-beebase}@postgres:5432/${POSTGRES_DB:-beebase}?sslmode=disable
+      REDIS_ADDR: redis:6379
     ports:
       - "${HTTP_PORT:-8080}:8080"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
