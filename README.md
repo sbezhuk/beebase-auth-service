@@ -240,7 +240,7 @@ or need manual cleanup.
 
 ```bash
 docker compose up -d postgres
-createdb -h localhost -U beebase beebase_test   # or: docker compose exec postgres createdb -U beebase beebase_test
+createdb -h localhost -U beebase beebase_test    # or: docker compose exec postgres createdb -U beebase beebase_test
 migrate -path migrations -database "$TEST_DATABASE_URL" up
 
 TEST_DATABASE_URL=postgres://beebase:beebase@localhost:5432/beebase_test?sslmode=disable \
