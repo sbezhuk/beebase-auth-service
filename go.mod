@@ -9,7 +9,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/pquerna/otp v1.5.0
-	github.com/sbezhuk/beebase-common v0.1.0
+	github.com/sbezhuk/beebase-common v0.3.0
 	golang.org/x/crypto v0.55.0
 )
 
@@ -28,5 +28,3 @@ require (
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 )
-
-replace github.com/sbezhuk/beebase-common => ../beebase-common
