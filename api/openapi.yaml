@@ -7,7 +7,7 @@ info:
     only private key in the deployment; every other BeeBase service
     verifies the tokens issued here via /.well-known/jwks.json instead of
     calling this service directly.
-  version: 0.5.0
+  version: 0.6.0
 servers:
   - url: http://localhost:8080
 
