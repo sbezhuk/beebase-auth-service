@@ -54,6 +54,9 @@ type MediaClient interface {
 	// else's - indistinguishable, by the same non-leaking convention
 	// user.ErrNotFound already follows).
 	VerifyOwnership(ctx context.Context, accessToken string, ids []uuid.UUID) error
+	// DeleteByIDs hard-deletes every media item in ids, used to clean up
+	// previous avatars when an avatar is replaced or removed.
+	DeleteByIDs(ctx context.Context, accessToken string, ids []uuid.UUID) error
 	// DeleteAllByUser hard-deletes every media item belonging to whoever
 	// presented accessToken. Used only by Service.DeleteAccount, as the
 	// final sweep for media never referenced by any apiary/hive/

@@ -227,6 +227,8 @@ func (f *fakeSessionStore) IsActive(_ context.Context, userID, sessionID uuid.UU
 // fail - used to exercise DeleteAccount's abort-on-failure behavior.
 type fakeMediaClient struct {
 	owned           map[uuid.UUID]bool
+	deletedIDs      []uuid.UUID
+	deleteErr       error
 	deleteAllCalled bool
 	deleteAllErr    error
 }
@@ -245,6 +247,14 @@ func (f *fakeMediaClient) VerifyOwnership(_ context.Context, _ string, ids []uui
 			return appauth.ErrAvatarNotFound
 		}
 	}
+	return nil
+}
+
+func (f *fakeMediaClient) DeleteByIDs(_ context.Context, _ string, ids []uuid.UUID) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	f.deletedIDs = append(f.deletedIDs, ids...)
 	return nil
 }
 
@@ -761,6 +771,178 @@ func TestUpdateProfile_NotFound(t *testing.T) {
 	})
 	if !errors.Is(err, user.ErrNotFound) {
 		t.Fatalf("UpdateProfile for unknown user: got %v, want ErrNotFound", err)
+	}
+}
+
+func TestUpdateProfile_ReplaceExistingAvatar_OldObjectDeleted(t *testing.T) {
+	oldAvatarID := uuid.New()
+	newAvatarID := uuid.New()
+	svc, _, _, media := newTestServiceWithMedia(oldAvatarID, newAvatarID)
+	session := mustRegister(t, svc, "bee@example.com", "supersecret")
+
+	// Set initial avatar.
+	if _, err := svc.UpdateProfile(context.Background(), session.UserID, "access-token", appauth.UpdateProfileInput{
+		FirstName: "Jane",
+		LastName:  "Doe",
+		Avatar:    &appauth.AvatarChange{MediaID: &oldAvatarID},
+	}); err != nil {
+		t.Fatalf("initial UpdateProfile: %v", err)
+	}
+	if len(media.deletedIDs) != 0 {
+		t.Fatalf("initial avatar setup should not delete any media, got %v", media.deletedIDs)
+	}
+
+	// Replace with new avatar.
+	updated, err := svc.UpdateProfile(context.Background(), session.UserID, "access-token", appauth.UpdateProfileInput{
+		FirstName: "Jane",
+		LastName:  "Doe",
+		Avatar:    &appauth.AvatarChange{MediaID: &newAvatarID},
+	})
+	if err != nil {
+		t.Fatalf("replace avatar UpdateProfile: %v", err)
+	}
+	if updated.AvatarMediaID == nil || *updated.AvatarMediaID != newAvatarID {
+		t.Errorf("AvatarMediaID = %v, want %v", updated.AvatarMediaID, newAvatarID)
+	}
+
+	// Old avatar object must be deleted from media service.
+	if len(media.deletedIDs) != 1 || media.deletedIDs[0] != oldAvatarID {
+		t.Errorf("deletedIDs = %v, want [%s]", media.deletedIDs, oldAvatarID)
+	}
+}
+
+func TestUpdateProfile_RemoveAvatar_ObjectDeleted(t *testing.T) {
+	avatarID := uuid.New()
+	svc, _, _, media := newTestServiceWithMedia(avatarID)
+	session := mustRegister(t, svc, "bee@example.com", "supersecret")
+
+	// Set initial avatar.
+	if _, err := svc.UpdateProfile(context.Background(), session.UserID, "access-token", appauth.UpdateProfileInput{
+		FirstName: "Jane",
+		LastName:  "Doe",
+		Avatar:    &appauth.AvatarChange{MediaID: &avatarID},
+	}); err != nil {
+		t.Fatalf("initial UpdateProfile: %v", err)
+	}
+	media.deletedIDs = nil // reset
+
+	// Remove avatar.
+	updated, err := svc.UpdateProfile(context.Background(), session.UserID, "access-token", appauth.UpdateProfileInput{
+		FirstName: "Jane",
+		LastName:  "Doe",
+		Avatar:    &appauth.AvatarChange{},
+	})
+	if err != nil {
+		t.Fatalf("remove avatar UpdateProfile: %v", err)
+	}
+	if updated.AvatarMediaID != nil {
+		t.Errorf("AvatarMediaID = %v, want nil after removal", updated.AvatarMediaID)
+	}
+
+	// Avatar object must be deleted from media service.
+	if len(media.deletedIDs) != 1 || media.deletedIDs[0] != avatarID {
+		t.Errorf("deletedIDs = %v, want [%s]", media.deletedIDs, avatarID)
+	}
+}
+
+func TestUpdateProfile_AddAvatar_NoPreviousAvatar(t *testing.T) {
+	avatarID := uuid.New()
+	svc, _, _, media := newTestServiceWithMedia(avatarID)
+	session := mustRegister(t, svc, "bee@example.com", "supersecret")
+
+	// Add avatar when user has no avatar yet.
+	updated, err := svc.UpdateProfile(context.Background(), session.UserID, "access-token", appauth.UpdateProfileInput{
+		FirstName: "Jane",
+		LastName:  "Doe",
+		Avatar:    &appauth.AvatarChange{MediaID: &avatarID},
+	})
+	if err != nil {
+		t.Fatalf("UpdateProfile: %v", err)
+	}
+	if updated.AvatarMediaID == nil || *updated.AvatarMediaID != avatarID {
+		t.Errorf("AvatarMediaID = %v, want %v", updated.AvatarMediaID, avatarID)
+	}
+
+	// No media should be deleted.
+	if len(media.deletedIDs) != 0 {
+		t.Errorf("deletedIDs = %v, want empty", media.deletedIDs)
+	}
+}
+
+func TestUpdateProfile_ReplaceAvatar_NewObjectIntact(t *testing.T) {
+	avatarID := uuid.New()
+	svc, _, _, media := newTestServiceWithMedia(avatarID)
+	session := mustRegister(t, svc, "bee@example.com", "supersecret")
+
+	// Set initial avatar.
+	if _, err := svc.UpdateProfile(context.Background(), session.UserID, "access-token", appauth.UpdateProfileInput{
+		FirstName: "Jane",
+		LastName:  "Doe",
+		Avatar:    &appauth.AvatarChange{MediaID: &avatarID},
+	}); err != nil {
+		t.Fatalf("initial UpdateProfile: %v", err)
+	}
+	media.deletedIDs = nil // reset
+
+	// Update profile providing the SAME avatar id: must not delete the new/current avatar.
+	updated, err := svc.UpdateProfile(context.Background(), session.UserID, "access-token", appauth.UpdateProfileInput{
+		FirstName: "Janet",
+		LastName:  "Doe",
+		Avatar:    &appauth.AvatarChange{MediaID: &avatarID},
+	})
+	if err != nil {
+		t.Fatalf("UpdateProfile: %v", err)
+	}
+	if updated.AvatarMediaID == nil || *updated.AvatarMediaID != avatarID {
+		t.Errorf("AvatarMediaID = %v, want %v", updated.AvatarMediaID, avatarID)
+	}
+
+	// Newly selected (same) avatar must NOT be deleted.
+	if len(media.deletedIDs) != 0 {
+		t.Errorf("deletedIDs = %v, want empty when replacing with same avatar", media.deletedIDs)
+	}
+}
+
+func TestUpdateProfile_StorageDeletionFailure_ErrorHandlingSemantics(t *testing.T) {
+	oldAvatarID := uuid.New()
+	newAvatarID := uuid.New()
+	svc, users, _, media := newTestServiceWithMedia(oldAvatarID, newAvatarID)
+	session := mustRegister(t, svc, "bee@example.com", "supersecret")
+
+	// Set initial avatar and name.
+	if _, err := svc.UpdateProfile(context.Background(), session.UserID, "access-token", appauth.UpdateProfileInput{
+		FirstName: "OriginalFirst",
+		LastName:  "OriginalLast",
+		Avatar:    &appauth.AvatarChange{MediaID: &oldAvatarID},
+	}); err != nil {
+		t.Fatalf("initial UpdateProfile: %v", err)
+	}
+
+	// Simulate storage/media deletion failure.
+	boom := errors.New("media storage deletion failed")
+	media.deleteErr = boom
+
+	// Attempt to replace avatar.
+	_, err := svc.UpdateProfile(context.Background(), session.UserID, "access-token", appauth.UpdateProfileInput{
+		FirstName: "NewFirst",
+		LastName:  "NewLast",
+		Avatar:    &appauth.AvatarChange{MediaID: &newAvatarID},
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("UpdateProfile on storage delete failure: got %v, want %v", err, boom)
+	}
+
+	// Verify database is not left in an inconsistent state:
+	// user profile remains intact with original name and original avatar.
+	current, err := users.GetByID(context.Background(), session.UserID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if current.FirstName != "OriginalFirst" || current.LastName != "OriginalLast" {
+		t.Errorf("name = %q %q, want OriginalFirst OriginalLast", current.FirstName, current.LastName)
+	}
+	if current.AvatarMediaID == nil || *current.AvatarMediaID != oldAvatarID {
+		t.Errorf("AvatarMediaID = %v, want original %v intact", current.AvatarMediaID, oldAvatarID)
 	}
 }
 

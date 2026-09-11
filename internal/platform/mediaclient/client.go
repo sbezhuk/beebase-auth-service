@@ -43,6 +43,16 @@ type mediaListResponse struct {
 	} `json:"items"`
 }
 
+// idsQuery builds the repeated ?ids=&ids=... query string shared by
+// VerifyOwnership and DeleteByIDs.
+func idsQuery(ids []uuid.UUID) string {
+	q := url.Values{}
+	for _, id := range ids {
+		q.Add("ids", id.String())
+	}
+	return q.Encode()
+}
+
 // VerifyOwnership implements application/auth.MediaClient by calling
 // media-service's GET /api/v1/media?ids= - the only remaining source of
 // truth for "does this media id exist and belong to me". media-service
@@ -50,11 +60,7 @@ type mediaListResponse struct {
 // different user, so a response with fewer items than requested means at
 // least one id failed that check.
 func (c *Client) VerifyOwnership(ctx context.Context, accessToken string, ids []uuid.UUID) error {
-	q := url.Values{}
-	for _, id := range ids {
-		q.Add("ids", id.String())
-	}
-	u := fmt.Sprintf("%s/api/v1/media?%s", c.baseURL, q.Encode())
+	u := fmt.Sprintf("%s/api/v1/media?%s", c.baseURL, idsQuery(ids))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -85,6 +91,35 @@ func (c *Client) VerifyOwnership(ctx context.Context, accessToken string, ids []
 	}
 
 	return nil
+}
+
+// DeleteByIDs implements application/auth.MediaClient by calling
+// media-service's DELETE /api/v1/media?ids= - used when an avatar is
+// replaced or removed, to hard-delete the previous avatar file.
+func (c *Client) DeleteByIDs(ctx context.Context, accessToken string, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	u := fmt.Sprintf("%s/api/v1/media?%s", c.baseURL, idsQuery(ids))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return fmt.Errorf("mediaclient: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("mediaclient: call media-service: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusNoContent, http.StatusOK:
+		return nil
+	default:
+		return fmt.Errorf("mediaclient: unexpected status %d from media-service", resp.StatusCode)
+	}
 }
 
 // DeleteAllByUser implements application/auth.MediaClient by calling

@@ -229,8 +229,16 @@ func (s *Service) CurrentUser(ctx context.Context, userID uuid.UUID) (*user.User
 // from a verified access token, so a caller can only ever update their
 // own profile) and returns the updated user. accessToken is the caller's
 // own access token, forwarded to media-service to verify ownership of a
-// newly-referenced avatar id before it's persisted - see
-// AvatarChange.
+// newly-referenced avatar id before it's persisted, and to delete the
+// previous avatar if one is being replaced or removed - see AvatarChange.
+//
+// Following the project's cascading delete and error-handling pattern
+// (see DeleteAccount and application/apiary.Service.Delete), downstream
+// media cleanup is performed before updating the local user row: if
+// deleting the previous avatar fails, UpdateProfile stops and returns
+// the error, leaving the account and user row fully intact so the
+// operation can be retried without leaving the database in an
+// inconsistent state.
 func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, accessToken string, in UpdateProfileInput) (*user.User, error) {
 	u, err := s.users.GetByID(ctx, userID)
 	if err != nil {
@@ -238,14 +246,27 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, accessTok
 	}
 
 	avatarMediaID := u.AvatarMediaID
+	var oldAvatarToDelete *uuid.UUID
 	if in.Avatar != nil {
 		if in.Avatar.MediaID != nil {
 			if err := s.media.VerifyOwnership(ctx, accessToken, []uuid.UUID{*in.Avatar.MediaID}); err != nil {
 				return nil, err
 			}
+			if u.AvatarMediaID != nil && *u.AvatarMediaID != *in.Avatar.MediaID {
+				oldAvatarToDelete = u.AvatarMediaID
+			}
 			avatarMediaID = in.Avatar.MediaID
 		} else {
+			if u.AvatarMediaID != nil {
+				oldAvatarToDelete = u.AvatarMediaID
+			}
 			avatarMediaID = nil
+		}
+	}
+
+	if oldAvatarToDelete != nil {
+		if err := s.media.DeleteByIDs(ctx, accessToken, []uuid.UUID{*oldAvatarToDelete}); err != nil {
+			return nil, err
 		}
 	}
 

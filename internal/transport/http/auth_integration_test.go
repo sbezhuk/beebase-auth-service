@@ -62,6 +62,10 @@ func (s *stubMediaClient) VerifyOwnership(_ context.Context, _ string, ids []uui
 	return nil
 }
 
+func (s *stubMediaClient) DeleteByIDs(_ context.Context, _ string, _ []uuid.UUID) error {
+	return nil
+}
+
 func (s *stubMediaClient) DeleteAllByUser(_ context.Context, _ string) error {
 	return nil
 }
