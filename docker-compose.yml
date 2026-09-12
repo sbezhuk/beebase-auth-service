@@ -5,13 +5,13 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-beebase}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-beebase}
-      POSTGRES_DB: ${POSTGRES_DB:-beebase}
+      POSTGRES_DB: ${POSTGRES_DB:-beebase_auth}
     ports:
       - "5432:5432"
     volumes:
-      - beebase_postgres_data:/var/lib/postgresql/data
+      - beebase_auth_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-beebase} -d ${POSTGRES_DB:-beebase}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-beebase} -d ${POSTGRES_DB:-beebase_auth}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -39,7 +39,7 @@ services:
       - ./migrations:/migrations:ro
     command:
       - -path=/migrations
-      - -database=postgres://${POSTGRES_USER:-beebase}:${POSTGRES_PASSWORD:-beebase}@postgres:5432/${POSTGRES_DB:-beebase}?sslmode=disable
+      - -database=postgres://${POSTGRES_USER:-beebase}:${POSTGRES_PASSWORD:-beebase}@postgres:5432/${POSTGRES_DB:-beebase_auth}?sslmode=disable
       - up
 
   app:
@@ -53,7 +53,7 @@ services:
       # Overrides .env's localhost DSN/address: within the compose network
       # the database and Redis are reachable at their service names, not
       # localhost.
-      DATABASE_URL: postgres://${POSTGRES_USER:-beebase}:${POSTGRES_PASSWORD:-beebase}@postgres:5432/${POSTGRES_DB:-beebase}?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER:-beebase}:${POSTGRES_PASSWORD:-beebase}@postgres:5432/${POSTGRES_DB:-beebase_auth}?sslmode=disable
       REDIS_ADDR: redis:6379
     ports:
       - "${HTTP_PORT:-8080}:8080"
@@ -66,4 +66,4 @@ services:
         condition: service_completed_successfully
 
 volumes:
-  beebase_postgres_data:
+  beebase_auth_postgres_data:
