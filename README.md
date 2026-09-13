@@ -55,7 +55,7 @@ Verify it's up:
 ```bash
 curl http://localhost:8080/health   # liveness — always 200 while the process is up
 curl http://localhost:8080/ready    # readiness — 200 only if the database is reachable
-curl http://localhost:8080/.well-known/jwks.json   # this service's public key
+curl http://localhost:8080/.well-known/jwks.json  # this service's public key
 
 curl -X POST http://localhost:8080/api/v1/auth/register \
   -H 'Content-Type: application/json' \
