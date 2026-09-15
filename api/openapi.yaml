@@ -543,7 +543,7 @@ components:
     refreshTokenCookie:
       type: apiKey
       in: cookie
-      name: refresh_token
+      name: refreshToken
       description: >-
         Opaque, single-use refresh token. Set as an HttpOnly cookie by
         /register, /login, and /refresh, scoped to /api/v1/auth — never
@@ -567,7 +567,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
-        created_at: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
 
     ProfileResponse:
       type: object
@@ -610,11 +610,11 @@ components:
         re-authenticate — unlike the cookie's own Expires attribute, which
         JavaScript can never read.
       properties:
-        access_token:
+        accessToken:
           type: string
           description: >-
             Short-lived JWT. Send as "Authorization: Bearer <token>".
-        access_token_expires_at:
+        accessTokenExpiresAt:
           type: integer
           format: int64
           description: >-
@@ -623,7 +623,7 @@ components:
             claim already inside the JWT, and is always well before
             refresh_token_expires_at.
           example: 1768470300
-        refresh_token_expires_at:
+        refreshTokenExpiresAt:
           type: integer
           format: int64
           description: >-
@@ -657,12 +657,12 @@ components:
         status:
           type: string
           enum: [totp_setup_required]
-        setup_token:
+        setupToken:
           type: string
           description: >-
             Single-use token identifying this setup challenge. Present
             to POST /api/v1/auth/2fa/setup/verify along with a valid code.
-        otpauth_uri:
+        otpauthUri:
           type: string
           description: >-
             Standard otpauth:// URI, ready to render as a QR code for
@@ -672,7 +672,7 @@ components:
           type: string
           description: Base32-encoded TOTP secret, for manual entry as a fallback to scanning the QR code.
           example: JBSWY3DPEHPK3PXP
-        expires_at:
+        expiresAt:
           type: integer
           format: int64
           description: Unix timestamp (seconds) this setup challenge expires at (TOTP_SETUP_TOKEN_TTL, 15m by default).
@@ -684,36 +684,36 @@ components:
         status:
           type: string
           enum: [otp_required]
-        challenge_token:
+        challengeToken:
           type: string
           description: >-
             Single-use token identifying this login attempt. Present to
             POST /api/v1/auth/login/verify-otp along with a valid code.
-        expires_at:
+        expiresAt:
           type: integer
           format: int64
           description: Unix timestamp (seconds) this challenge expires at (LOGIN_CHALLENGE_TTL, 5m by default).
 
     SetupVerifyRequest:
       type: object
-      required: [setup_token, otp]
+      required: [setupToken, otp]
       properties:
-        setup_token: { type: string }
+        setupToken: { type: string }
         otp: { type: string, pattern: "^[0-9]{6}$", example: "123456" }
 
     LoginVerifyOtpRequest:
       type: object
-      required: [challenge_token, otp]
+      required: [challengeToken, otp]
       properties:
-        challenge_token: { type: string }
+        challengeToken: { type: string }
         otp: { type: string, pattern: "^[0-9]{6}$", example: "123456" }
 
     ChangePasswordRequest:
       type: object
-      required: [current_password, new_password, otp]
+      required: [currentPassword, newPassword, otp]
       properties:
-        current_password: { type: string }
-        new_password: { type: string, minLength: 8 }
+        currentPassword: { type: string }
+        newPassword: { type: string, minLength: 8 }
         otp: { type: string, pattern: "^[0-9]{6}$", example: "123456" }
 
     PasswordResetRequestRequest:
@@ -729,45 +729,45 @@ components:
         belonged to an account eligible for recovery — see the operation
         description on POST /api/v1/auth/password-reset/request.
       properties:
-        flow_token:
+        flowToken:
           type: string
           description: >-
             Present to POST /api/v1/auth/password-reset/verify-otp along
             with a valid code. Not, by itself, sufficient to reset a
             password.
-        expires_at:
+        expiresAt:
           type: integer
           format: int64
           description: Unix timestamp (seconds) this flow expires at (PASSWORD_RESET_FLOW_TTL, 10m by default).
 
     PasswordResetVerifyOtpRequest:
       type: object
-      required: [flow_token, otp]
+      required: [flowToken, otp]
       properties:
-        flow_token: { type: string }
+        flowToken: { type: string }
         otp: { type: string, pattern: "^[0-9]{6}$", example: "123456" }
 
     PasswordResetOtpVerifiedResponse:
       type: object
       properties:
-        reset_token:
+        resetToken:
           type: string
           description: >-
             Single-use token proving the OTP step succeeded for this
             flow. Present to POST /api/v1/auth/password-reset/confirm
             along with the new password.
-        expires_at:
+        expiresAt:
           type: integer
           format: int64
           description: Unix timestamp (seconds) reset_token expires at (PASSWORD_RESET_TOKEN_TTL, 10m by default).
 
     PasswordResetConfirmRequest:
       type: object
-      required: [reset_token, new_password, confirm_password]
+      required: [resetToken, newPassword, confirmPassword]
       properties:
-        reset_token: { type: string }
-        new_password: { type: string, minLength: 8 }
-        confirm_password: { type: string, minLength: 8 }
+        resetToken: { type: string }
+        newPassword: { type: string, minLength: 8 }
+        confirmPassword: { type: string, minLength: 8 }
 
     ErrorResponse:
       type: object
