@@ -9,7 +9,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/pquerna/otp v1.5.0
-	github.com/sbezhuk/beebase-common v1.1.0-rc3
+	github.com/sbezhuk/beebase-common v1.2.0-rc4
 	golang.org/x/crypto v0.55.0
 )
 

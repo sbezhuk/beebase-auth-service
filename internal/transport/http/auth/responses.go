@@ -19,9 +19,9 @@ import (
 // Both expiry fields are Unix timestamps (seconds), matching the "exp"
 // claim already inside the access token JWT itself.
 type SessionResponse struct {
-	AccessToken           string       `json:"access_token"`
-	AccessTokenExpiresAt  int64        `json:"access_token_expires_at"`
-	RefreshTokenExpiresAt int64        `json:"refresh_token_expires_at"`
+	AccessToken           string       `json:"accessToken"`
+	AccessTokenExpiresAt  int64        `json:"accessTokenExpiresAt"`
+	RefreshTokenExpiresAt int64        `json:"refreshTokenExpiresAt"`
 	User                  UserResponse `json:"user"`
 }
 
@@ -29,7 +29,7 @@ type SessionResponse struct {
 type UserResponse struct {
 	ID        uuid.UUID `json:"id"`
 	Email     string    `json:"email"`
-	CreatedAt time.Time `json:"created_at"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 func newSessionResponse(s *appauth.Session) SessionResponse {
@@ -55,10 +55,10 @@ func newUserResponse(u *user.User) UserResponse {
 // any other endpoint.
 type TOTPSetupResponse struct {
 	Status     string `json:"status"`
-	SetupToken string `json:"setup_token"`
-	OtpauthURI string `json:"otpauth_uri"`
+	SetupToken string `json:"setupToken"`
+	OtpauthURI string `json:"otpauthUri"`
 	Secret     string `json:"secret"`
-	ExpiresAt  int64  `json:"expires_at"`
+	ExpiresAt  int64  `json:"expiresAt"`
 }
 
 func newTOTPSetupResponseFromRegister(r *appauth.RegisterResult) TOTPSetupResponse {
@@ -86,8 +86,8 @@ func newTOTPSetupResponseFromLogin(r *appauth.LoginResult) TOTPSetupResponse {
 // LoginVerifyOTP to obtain a session.
 type LoginOTPRequiredResponse struct {
 	Status         string `json:"status"`
-	ChallengeToken string `json:"challenge_token"`
-	ExpiresAt      int64  `json:"expires_at"`
+	ChallengeToken string `json:"challengeToken"`
+	ExpiresAt      int64  `json:"expiresAt"`
 }
 
 func newLoginOTPRequiredResponse(r *appauth.LoginResult) LoginOTPRequiredResponse {
@@ -102,8 +102,8 @@ func newLoginOTPRequiredResponse(r *appauth.LoginResult) LoginOTPRequiredRespons
 // shape never varies with whether the account was eligible for recovery -
 // see application/auth.Service.RequestPasswordReset.
 type PasswordResetRequestedResponse struct {
-	FlowToken string `json:"flow_token"`
-	ExpiresAt int64  `json:"expires_at"`
+	FlowToken string `json:"flowToken"`
+	ExpiresAt int64  `json:"expiresAt"`
 }
 
 func newPasswordResetRequestedResponse(r *appauth.PasswordResetRequestResult) PasswordResetRequestedResponse {
@@ -114,8 +114,8 @@ func newPasswordResetRequestedResponse(r *appauth.PasswordResetRequestResult) Pa
 // ResetToken must be presented to ConfirmPasswordReset to actually change
 // the password.
 type PasswordResetOTPVerifiedResponse struct {
-	ResetToken string `json:"reset_token"`
-	ExpiresAt  int64  `json:"expires_at"`
+	ResetToken string `json:"resetToken"`
+	ExpiresAt  int64  `json:"expiresAt"`
 }
 
 func newPasswordResetOTPVerifiedResponse(r *appauth.PasswordResetOTPResult) PasswordResetOTPVerifiedResponse {

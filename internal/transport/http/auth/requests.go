@@ -127,14 +127,14 @@ func validateOTP(code string) string {
 
 // SetupVerifyRequest is the body of POST /auth/2fa/setup/verify.
 type SetupVerifyRequest struct {
-	SetupToken string `json:"setup_token"`
+	SetupToken string `json:"setupToken"`
 	OTP        string `json:"otp"`
 }
 
 func (r *SetupVerifyRequest) Validate() map[string]string {
 	fields := map[string]string{}
 	if strings.TrimSpace(r.SetupToken) == "" {
-		fields["setup_token"] = CodeSetupTokenRequired
+		fields["setupToken"] = CodeSetupTokenRequired
 	}
 	if code := validateOTP(r.OTP); code != "" {
 		fields["otp"] = code
@@ -144,14 +144,14 @@ func (r *SetupVerifyRequest) Validate() map[string]string {
 
 // LoginVerifyOTPRequest is the body of POST /auth/login/verify-otp.
 type LoginVerifyOTPRequest struct {
-	ChallengeToken string `json:"challenge_token"`
+	ChallengeToken string `json:"challengeToken"`
 	OTP            string `json:"otp"`
 }
 
 func (r *LoginVerifyOTPRequest) Validate() map[string]string {
 	fields := map[string]string{}
 	if strings.TrimSpace(r.ChallengeToken) == "" {
-		fields["challenge_token"] = CodeChallengeTokenRequired
+		fields["challengeToken"] = CodeChallengeTokenRequired
 	}
 	if code := validateOTP(r.OTP); code != "" {
 		fields["otp"] = code
@@ -161,18 +161,18 @@ func (r *LoginVerifyOTPRequest) Validate() map[string]string {
 
 // ChangePasswordRequest is the body of POST /auth/change-password.
 type ChangePasswordRequest struct {
-	CurrentPassword string `json:"current_password"`
-	NewPassword     string `json:"new_password"`
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
 	OTP             string `json:"otp"`
 }
 
 func (r *ChangePasswordRequest) Validate() map[string]string {
 	fields := map[string]string{}
 	if r.CurrentPassword == "" {
-		fields["current_password"] = CodeCurrentPasswordRequired
+		fields["currentPassword"] = CodeCurrentPasswordRequired
 	}
 	if code := validatePassword(r.NewPassword); code != "" {
-		fields["new_password"] = code
+		fields["newPassword"] = code
 	}
 	if code := validateOTP(r.OTP); code != "" {
 		fields["otp"] = code
@@ -196,14 +196,14 @@ func (r *PasswordResetRequestRequest) Validate() map[string]string {
 // PasswordResetVerifyOTPRequest is the body of POST
 // /auth/password-reset/verify-otp.
 type PasswordResetVerifyOTPRequest struct {
-	FlowToken string `json:"flow_token"`
+	FlowToken string `json:"flowToken"`
 	OTP       string `json:"otp"`
 }
 
 func (r *PasswordResetVerifyOTPRequest) Validate() map[string]string {
 	fields := map[string]string{}
 	if strings.TrimSpace(r.FlowToken) == "" {
-		fields["flow_token"] = CodeFlowTokenRequired
+		fields["flowToken"] = CodeFlowTokenRequired
 	}
 	if code := validateOTP(r.OTP); code != "" {
 		fields["otp"] = code
@@ -214,21 +214,21 @@ func (r *PasswordResetVerifyOTPRequest) Validate() map[string]string {
 // PasswordResetConfirmRequest is the body of POST
 // /auth/password-reset/confirm.
 type PasswordResetConfirmRequest struct {
-	ResetToken      string `json:"reset_token"`
-	NewPassword     string `json:"new_password"`
-	ConfirmPassword string `json:"confirm_password"`
+	ResetToken      string `json:"resetToken"`
+	NewPassword     string `json:"newPassword"`
+	ConfirmPassword string `json:"confirmPassword"`
 }
 
 func (r *PasswordResetConfirmRequest) Validate() map[string]string {
 	fields := map[string]string{}
 	if strings.TrimSpace(r.ResetToken) == "" {
-		fields["reset_token"] = CodeResetTokenRequired
+		fields["resetToken"] = CodeResetTokenRequired
 	}
 	if code := validatePassword(r.NewPassword); code != "" {
-		fields["new_password"] = code
+		fields["newPassword"] = code
 	}
 	if r.NewPassword != r.ConfirmPassword {
-		fields["confirm_password"] = CodeConfirmPasswordMismatch
+		fields["confirmPassword"] = CodeConfirmPasswordMismatch
 	}
 	return fields
 }

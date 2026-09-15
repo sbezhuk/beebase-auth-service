@@ -37,7 +37,7 @@ const (
 // refreshTokenCookieName is the cookie the refresh token travels in. It's
 // never exposed in a JSON response body, so client-side JavaScript can
 // never read it.
-const refreshTokenCookieName = "refresh_token"
+const refreshTokenCookieName = "refreshToken"
 
 // refreshTokenCookiePath scopes the cookie to the auth endpoints that
 // actually need it, so it isn't attached to every other request the

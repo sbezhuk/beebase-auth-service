@@ -334,7 +334,7 @@ func registerAndCompleteSetup(t *testing.T, client *http.Client, srv *httptest.S
 	}
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/2fa/setup/verify", map[string]string{
-		"setup_token": setup.SetupToken,
+		"setupToken": setup.SetupToken,
 		"otp":         genCode(t, setup.Secret),
 	})
 	if resp.StatusCode != http.StatusOK {
@@ -386,7 +386,7 @@ func TestAuthFlow_RegisterSetupThenMeAndLoginRequireOTP(t *testing.T) {
 
 	// A wrong code must not complete the login.
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/login/verify-otp", map[string]string{
-		"challenge_token": otpRequired.ChallengeToken,
+		"challengeToken": otpRequired.ChallengeToken,
 		"otp":             "000000",
 	})
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -420,7 +420,7 @@ func TestAuthFlow_FullOTPCycle(t *testing.T) {
 	decodeJSON(t, resp, &setup)
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/2fa/setup/verify", map[string]string{
-		"setup_token": setup.SetupToken,
+		"setupToken": setup.SetupToken,
 		"otp":         genCode(t, setup.Secret),
 	})
 	if resp.StatusCode != http.StatusOK {
@@ -438,7 +438,7 @@ func TestAuthFlow_FullOTPCycle(t *testing.T) {
 	decodeJSON(t, resp, &otpRequired)
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/login/verify-otp", map[string]string{
-		"challenge_token": otpRequired.ChallengeToken,
+		"challengeToken": otpRequired.ChallengeToken,
 		"otp":             genNextCode(t, setup.Secret),
 	})
 	if resp.StatusCode != http.StatusOK {
@@ -492,8 +492,8 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 	}
 
 	resp := authedPost(srv.URL+"/api/v1/auth/change-password", map[string]string{
-		"current_password": "wrong-password",
-		"new_password":     "brandnewpassword",
+		"currentPassword": "wrong-password",
+		"newPassword":     "brandnewpassword",
 		"otp":              genCode(t, secret),
 	})
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -501,8 +501,8 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 	}
 
 	resp = authedPost(srv.URL+"/api/v1/auth/change-password", map[string]string{
-		"current_password": "supersecret",
-		"new_password":     "brandnewpassword",
+		"currentPassword": "supersecret",
+		"newPassword":     "brandnewpassword",
 		"otp":              "000000",
 	})
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -510,8 +510,8 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 	}
 
 	resp = authedPost(srv.URL+"/api/v1/auth/change-password", map[string]string{
-		"current_password": "supersecret",
-		"new_password":     "brandnewpassword",
+		"currentPassword": "supersecret",
+		"newPassword":     "brandnewpassword",
 		"otp":              genNextCode(t, secret),
 	})
 	if resp.StatusCode != http.StatusNoContent {
@@ -551,16 +551,16 @@ func TestAuthFlow_PasswordResetCycle(t *testing.T) {
 	// Confirm cannot be reached with only the flow token - OTP must be
 	// verified first.
 	confirmResp := postJSON(t, client, srv.URL+"/api/v1/auth/password-reset/confirm", map[string]string{
-		"reset_token":      requested.FlowToken,
-		"new_password":     "brandnewpassword",
-		"confirm_password": "brandnewpassword",
+		"resetToken":      requested.FlowToken,
+		"newPassword":     "brandnewpassword",
+		"confirmPassword": "brandnewpassword",
 	})
 	if confirmResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("password-reset/confirm without OTP verify: status = %d, want %d", confirmResp.StatusCode, http.StatusBadRequest)
 	}
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/password-reset/verify-otp", map[string]string{
-		"flow_token": requested.FlowToken,
+		"flowToken": requested.FlowToken,
 		"otp":        genNextCode(t, secret),
 	})
 	if resp.StatusCode != http.StatusOK {
@@ -573,9 +573,9 @@ func TestAuthFlow_PasswordResetCycle(t *testing.T) {
 	}
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/password-reset/confirm", map[string]string{
-		"reset_token":      verified.ResetToken,
-		"new_password":     "brandnewpassword",
-		"confirm_password": "brandnewpassword",
+		"resetToken":      verified.ResetToken,
+		"newPassword":     "brandnewpassword",
+		"confirmPassword": "brandnewpassword",
 	})
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("password-reset/confirm: status = %d, want %d", resp.StatusCode, http.StatusNoContent)
