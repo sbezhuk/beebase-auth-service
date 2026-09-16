@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -12,7 +11,6 @@ import (
 	totpdomain "github.com/sbezhuk/beebase-auth-service/internal/domain/totp"
 	"github.com/sbezhuk/beebase-auth-service/internal/domain/user"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/tokenhash"
-	"github.com/sbezhuk/beebase-auth-service/internal/platform/totp"
 )
 
 // RequestPasswordReset always succeeds and always returns a result with
@@ -87,9 +85,9 @@ func (s *Service) VerifyPasswordResetOTP(ctx context.Context, flowToken, code st
 			return nil, credErr
 		}
 		if credErr == nil && cred.IsEnabled() {
-			secret, err := s.cipher.Decrypt(cred.SecretEncrypted)
-			if err != nil {
-				return nil, fmt.Errorf("auth: decrypt totp secret: %w", err)
+			u, userErr := s.users.GetByID(ctx, *flow.UserID)
+			if userErr != nil {
+				return nil, userErr
 			}
 			// Anti-replay (see service_totp.go/BEEB-41) applies here too:
 			// a code intercepted during a real login must not also be
@@ -98,11 +96,17 @@ func (s *Service) VerifyPasswordResetOTP(ctx context.Context, flowToken, code st
 			// FailedAttempts/LockedUntil (see the flow's own otp_attempts
 			// cap above), but a used code is used account-wide, not just
 			// within this flow.
-			if ok, counter := totp.ValidateAt(code, string(secret), time.Now().UTC()); ok && !cred.IsCodeConsumed(counter) {
+			ok, counter, demoCode, validationErr := s.validateOTP(u.Email, cred, code)
+			if validationErr != nil {
+				return nil, validationErr
+			}
+			if ok && (demoCode || !cred.IsCodeConsumed(counter)) {
 				valid = true
-				cred.MarkCodeUsed(counter)
-				if err := s.credentials.Update(ctx, cred); err != nil {
-					return nil, fmt.Errorf("auth: persist totp anti-replay state: %w", err)
+				if !demoCode {
+					cred.MarkCodeUsed(counter)
+					if err := s.credentials.Update(ctx, cred); err != nil {
+						return nil, fmt.Errorf("auth: persist totp anti-replay state: %w", err)
+					}
 				}
 			}
 		}

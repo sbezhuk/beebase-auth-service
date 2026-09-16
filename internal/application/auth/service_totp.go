@@ -15,6 +15,11 @@ import (
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/totp"
 )
 
+const (
+	demoAccountEmail = "demo@gmail.com"
+	demoOTPCode      = "123456"
+)
+
 // verifyOTP checks code against cred's decrypted secret, applying and
 // persisting cred's account-level lockout state either way. This is the
 // one shared gate for every flow that has already proven password
@@ -22,18 +27,16 @@ import (
 // password deliberately does not go through this: see
 // service_password_reset.go for why its lockout must stay independent (it
 // still enforces the anti-replay check below against the same credential).
-func (s *Service) verifyOTP(ctx context.Context, cred *totpdomain.Credential, code string) error {
+func (s *Service) verifyOTP(ctx context.Context, email string, cred *totpdomain.Credential, code string) error {
 	if cred.IsLocked() {
 		return ErrOTPLocked
 	}
 
-	secret, err := s.cipher.Decrypt(cred.SecretEncrypted)
+	ok, counter, demoCode, err := s.validateOTP(email, cred, code)
 	if err != nil {
-		return fmt.Errorf("auth: decrypt totp secret: %w", err)
+		return err
 	}
-
-	ok, counter := totp.ValidateAt(code, string(secret), time.Now().UTC())
-	if ok && cred.IsCodeConsumed(counter) {
+	if ok && !demoCode && cred.IsCodeConsumed(counter) {
 		// Mathematically valid, but already used (or superseded by a later
 		// code) - see BEEB-41: without this, a captured code stays usable
 		// for the rest of the skew window even after the legitimate user
@@ -60,6 +63,25 @@ func (s *Service) verifyOTP(ctx context.Context, cred *totpdomain.Credential, co
 	return nil
 }
 
+// validateOTP is the single account-aware TOTP validation point. The demo
+// code is deliberately scoped to one exact account and does not replace
+// secret generation or ordinary TOTP validation.
+func (s *Service) validateOTP(email string, cred *totpdomain.Credential, code string) (ok bool, counter int64, demoCode bool, err error) {
+	if email == demoAccountEmail && code == demoOTPCode {
+		// A fixed code has no real TOTP counter. Keep the sentinel below out of
+		// anti-replay comparisons while still recording a successful attempt.
+		return true, 0, true, nil
+	}
+
+	secret, err := s.cipher.Decrypt(cred.SecretEncrypted)
+	if err != nil {
+		return false, 0, false, fmt.Errorf("auth: decrypt totp secret: %w", err)
+	}
+
+	ok, counter = totp.ValidateAt(code, string(secret), time.Now().UTC())
+	return ok, counter, false, nil
+}
+
 // SetupVerifyOTP completes a pending TOTP setup: setupToken identifies the
 // challenge (issued by Register or a Login-triggered setup), code must be
 // a currently-valid TOTP for the secret issued with it. On success the
@@ -79,7 +101,12 @@ func (s *Service) SetupVerifyOTP(ctx context.Context, setupToken, code string) (
 		return nil, ErrSetupTokenInvalid
 	}
 
-	if err := s.verifyOTP(ctx, cred, code); err != nil {
+	u, err := s.users.GetByID(ctx, cred.UserID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.verifyOTP(ctx, u.Email, cred, code); err != nil {
 		return nil, err
 	}
 
@@ -88,10 +115,6 @@ func (s *Service) SetupVerifyOTP(ctx context.Context, setupToken, code string) (
 		return nil, fmt.Errorf("auth: enable totp credential: %w", err)
 	}
 
-	u, err := s.users.GetByID(ctx, cred.UserID)
-	if err != nil {
-		return nil, err
-	}
 	if u.DeletionStatus == user.DeletionStatusPending {
 		return nil, ErrInvalidCredentials
 	}
@@ -124,7 +147,12 @@ func (s *Service) LoginVerifyOTP(ctx context.Context, challengeToken, code strin
 		return nil, err
 	}
 
-	if err := s.verifyOTP(ctx, cred, code); err != nil {
+	u, err := s.users.GetByID(ctx, challenge.UserID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.verifyOTP(ctx, u.Email, cred, code); err != nil {
 		return nil, err
 	}
 
@@ -132,10 +160,6 @@ func (s *Service) LoginVerifyOTP(ctx context.Context, challengeToken, code strin
 		return nil, fmt.Errorf("auth: consume login challenge: %w", err)
 	}
 
-	u, err := s.users.GetByID(ctx, challenge.UserID)
-	if err != nil {
-		return nil, err
-	}
 	if u.DeletionStatus == user.DeletionStatusPending {
 		return nil, ErrChallengeInvalid
 	}
@@ -174,7 +198,7 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, in Chang
 		return err
 	}
 
-	if err := s.verifyOTP(ctx, cred, in.OTP); err != nil {
+	if err := s.verifyOTP(ctx, u.Email, cred, in.OTP); err != nil {
 		return err
 	}
 

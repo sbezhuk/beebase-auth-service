@@ -325,7 +325,8 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, accessTok
 // explicitly as well, because it lives outside PostgreSQL and therefore
 // cannot be covered by the database cascade.
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID, accessToken, otp string) error {
-	if _, err := s.users.GetByID(ctx, userID); err != nil {
+	u, err := s.users.GetByID(ctx, userID)
+	if err != nil {
 		return err
 	}
 
@@ -342,7 +343,7 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID, accessTok
 		return err
 	}
 
-	if err := s.verifyOTP(ctx, cred, otp); err != nil {
+	if err := s.verifyOTP(ctx, u.Email, cred, otp); err != nil {
 		return err
 	}
 

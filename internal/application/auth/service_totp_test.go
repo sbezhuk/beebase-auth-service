@@ -50,6 +50,75 @@ func TestSetupVerifyOTP_SetupTokenNotReusableAfterEnabling(t *testing.T) {
 	}
 }
 
+func TestDemoAccount_FixedCodeCompletesTOTPSetup(t *testing.T) {
+	svc, _, _ := newTestService()
+	setup, err := svc.Register(context.Background(), appauth.RegisterInput{Email: "demo@gmail.com", Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if setup.Secret == "" || setup.OtpauthURI == "" {
+		t.Fatal("demo registration must still generate a TOTP secret and otpauth URI")
+	}
+
+	if _, err := svc.SetupVerifyOTP(context.Background(), setup.SetupToken, "123456"); err != nil {
+		t.Fatalf("SetupVerifyOTP with demo code: %v", err)
+	}
+}
+
+func TestDemoAccount_FixedAndGeneratedCodesAreValid(t *testing.T) {
+	svc, _, _ := newTestService()
+	setup, err := svc.Register(context.Background(), appauth.RegisterInput{Email: "demo@gmail.com", Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err := svc.SetupVerifyOTP(context.Background(), setup.SetupToken, "123456"); err != nil {
+		t.Fatalf("SetupVerifyOTP with demo code: %v", err)
+	}
+
+	login, err := svc.Login(context.Background(), appauth.LoginInput{Email: "demo@gmail.com", Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if _, err := svc.LoginVerifyOTP(context.Background(), login.ChallengeToken, genCode(t, setup.Secret)); err != nil {
+		t.Fatalf("LoginVerifyOTP with generated demo code: %v", err)
+	}
+
+	login, err = svc.Login(context.Background(), appauth.LoginInput{Email: "demo@gmail.com", Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("second Login: %v", err)
+	}
+	if _, err := svc.LoginVerifyOTP(context.Background(), login.ChallengeToken, "123456"); err != nil {
+		t.Fatalf("LoginVerifyOTP with fixed demo code: %v", err)
+	}
+}
+
+func TestDemoCode_IsRejectedForOtherAccounts(t *testing.T) {
+	svc, _, _ := newTestService()
+	setup, err := svc.Register(context.Background(), appauth.RegisterInput{Email: "bee@example.com", Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err := svc.SetupVerifyOTP(context.Background(), setup.SetupToken, genCode(t, setup.Secret)); err != nil {
+		t.Fatalf("SetupVerifyOTP: %v", err)
+	}
+
+	login, err := svc.Login(context.Background(), appauth.LoginInput{Email: "bee@example.com", Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	err = nil
+	_, err = svc.LoginVerifyOTP(context.Background(), login.ChallengeToken, "123456")
+	if genCode(t, setup.Secret) == "123456" {
+		if err != nil {
+			t.Fatalf("legitimately generated 123456 for normal account: %v", err)
+		}
+		return
+	}
+	if !errors.Is(err, appauth.ErrOTPInvalid) {
+		t.Fatalf("LoginVerifyOTP with demo code for normal account: got %v, want ErrOTPInvalid", err)
+	}
+}
+
 // --- LoginVerifyOTP ---
 
 func TestLoginVerifyOTP_Success(t *testing.T) {
