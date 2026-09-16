@@ -117,7 +117,7 @@ func (s *DeletionStore) RequestDeletion(ctx context.Context, userID uuid.UUID) e
 		return fmt.Errorf("deletion: create job: %w", err)
 	}
 	for _, name := range deletionServices {
-		if _, err = tx.Exec(ctx, `INSERT INTO account_deletion_steps (job_id,service) VALUES ($1,$2) ON CONFLICT DO NOTHING`, jobID, name); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO account_deletion_steps (job_id,service,status) VALUES ($1,$2,'pending') ON CONFLICT DO NOTHING`, jobID, name); err != nil {
 			return fmt.Errorf("deletion: create step: %w", err)
 		}
 	}
