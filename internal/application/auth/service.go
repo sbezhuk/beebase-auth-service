@@ -226,8 +226,13 @@ func (s *Service) Logout(ctx context.Context, rawToken string) error {
 		return err
 	}
 
-	if err := s.sessions.Deactivate(ctx, rt.UserID); err != nil {
+	if _, err := s.sessions.DeactivateIfCurrent(ctx, rt.UserID, rt.ID); err != nil {
 		return fmt.Errorf("auth: deactivate session on logout: %w", err)
+	}
+	if cleaner, ok := s.deletion.(SessionCleanupRequester); ok {
+		if err := cleaner.DeleteSessionData(ctx, rt.UserID, rt.ID); err != nil {
+			return fmt.Errorf("auth: clean up logged-out session devices: %w", err)
+		}
 	}
 
 	return nil
@@ -396,15 +401,32 @@ func (s *Service) issueSession(ctx context.Context, u *user.User) (*Session, err
 	}
 	rt := token.New(u.ID, tokenhash.Hash(rawRefresh), s.security.RefreshTTL)
 
-	if err := s.sessions.Activate(ctx, u.ID, rt.ID, s.security.RefreshTTL); err != nil {
+	var previous uuid.UUID
+	var hadPrevious bool
+	var generation int64
+	previous, hadPrevious, generation, err = s.sessions.ActivateAndReturnPreviousWithGeneration(ctx, u.ID, rt.ID, s.security.RefreshTTL)
+	if err != nil {
 		return nil, fmt.Errorf("auth: activate session: %w", err)
 	}
 
 	if err := s.refreshTokens.Create(ctx, rt); err != nil {
 		return nil, fmt.Errorf("auth: store refresh token: %w", err)
 	}
+	if hadPrevious {
+		if cleaner, ok := s.deletion.(SessionCleanupRequester); ok {
+			if err := cleaner.DeleteSessionData(ctx, u.ID, previous); err != nil {
+				return nil, fmt.Errorf("auth: clean up replaced session devices: %w", err)
+			}
+		}
+	}
 
-	accessToken, expiresAt, err := s.issuer.Issue(u.ID, rt.ID)
+	var accessToken string
+	var expiresAt time.Time
+	if generationIssuer, ok := s.issuer.(GenerationAccessTokenIssuer); ok {
+		accessToken, expiresAt, err = generationIssuer.IssueWithGeneration(u.ID, rt.ID, generation)
+	} else {
+		accessToken, expiresAt, err = s.issuer.Issue(u.ID, rt.ID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("auth: issue access token: %w", err)
 	}

@@ -35,6 +35,10 @@ func NewIssuer(priv ed25519.PrivateKey, kid string, ttl time.Duration) *Issuer {
 // verifier backed by a session store can reject it the instant that
 // session is superseded), returning the token and its expiry time.
 func (i *Issuer) Issue(userID, sessionID uuid.UUID) (string, time.Time, error) {
+	return i.IssueWithGeneration(userID, sessionID, 0)
+}
+
+func (i *Issuer) IssueWithGeneration(userID, sessionID uuid.UUID, generation int64) (string, time.Time, error) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(i.ttl)
 
@@ -44,7 +48,8 @@ func (i *Issuer) Issue(userID, sessionID uuid.UUID) (string, time.Time, error) {
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
-		SessionID: sessionID,
+		SessionID:         sessionID,
+		SessionGeneration: generation,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)

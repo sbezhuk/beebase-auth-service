@@ -100,12 +100,30 @@ func (s *stubSessionStore) Activate(_ context.Context, userID, sessionID uuid.UU
 	return nil
 }
 
+func (s *stubSessionStore) ActivateAndReturnPreviousWithGeneration(_ context.Context, userID, sessionID uuid.UUID, _ time.Duration) (uuid.UUID, bool, int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous, ok := s.active[userID]
+	s.active[userID] = sessionID
+	return previous, ok, 1, nil
+}
+
 func (s *stubSessionStore) Deactivate(_ context.Context, userID uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	delete(s.active, userID)
 	return nil
+}
+
+func (s *stubSessionStore) DeactivateIfCurrent(_ context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active[userID] != sessionID {
+		return false, nil
+	}
+	delete(s.active, userID)
+	return true, nil
 }
 
 func (s *stubSessionStore) IsActive(_ context.Context, userID, sessionID uuid.UUID) (bool, error) {
@@ -335,7 +353,7 @@ func registerAndCompleteSetup(t *testing.T, client *http.Client, srv *httptest.S
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/2fa/setup/verify", map[string]string{
 		"setupToken": setup.SetupToken,
-		"otp":         genCode(t, setup.Secret),
+		"otp":        genCode(t, setup.Secret),
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("2fa/setup/verify: status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -387,7 +405,7 @@ func TestAuthFlow_RegisterSetupThenMeAndLoginRequireOTP(t *testing.T) {
 	// A wrong code must not complete the login.
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/login/verify-otp", map[string]string{
 		"challengeToken": otpRequired.ChallengeToken,
-		"otp":             "000000",
+		"otp":            "000000",
 	})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("login/verify-otp with wrong code: status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
@@ -421,7 +439,7 @@ func TestAuthFlow_FullOTPCycle(t *testing.T) {
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/2fa/setup/verify", map[string]string{
 		"setupToken": setup.SetupToken,
-		"otp":         genCode(t, setup.Secret),
+		"otp":        genCode(t, setup.Secret),
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("2fa/setup/verify: status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -439,7 +457,7 @@ func TestAuthFlow_FullOTPCycle(t *testing.T) {
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/login/verify-otp", map[string]string{
 		"challengeToken": otpRequired.ChallengeToken,
-		"otp":             genNextCode(t, setup.Secret),
+		"otp":            genNextCode(t, setup.Secret),
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("login/verify-otp: status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -494,7 +512,7 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 	resp := authedPost(srv.URL+"/api/v1/auth/change-password", map[string]string{
 		"currentPassword": "wrong-password",
 		"newPassword":     "brandnewpassword",
-		"otp":              genCode(t, secret),
+		"otp":             genCode(t, secret),
 	})
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("change-password wrong current password: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
@@ -503,7 +521,7 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 	resp = authedPost(srv.URL+"/api/v1/auth/change-password", map[string]string{
 		"currentPassword": "supersecret",
 		"newPassword":     "brandnewpassword",
-		"otp":              "000000",
+		"otp":             "000000",
 	})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("change-password wrong otp: status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
@@ -512,7 +530,7 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 	resp = authedPost(srv.URL+"/api/v1/auth/change-password", map[string]string{
 		"currentPassword": "supersecret",
 		"newPassword":     "brandnewpassword",
-		"otp":              genNextCode(t, secret),
+		"otp":             genNextCode(t, secret),
 	})
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("change-password: status = %d, want %d", resp.StatusCode, http.StatusNoContent)
@@ -561,7 +579,7 @@ func TestAuthFlow_PasswordResetCycle(t *testing.T) {
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/password-reset/verify-otp", map[string]string{
 		"flowToken": requested.FlowToken,
-		"otp":        genNextCode(t, secret),
+		"otp":       genNextCode(t, secret),
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("password-reset/verify-otp: status = %d, want %d", resp.StatusCode, http.StatusOK)

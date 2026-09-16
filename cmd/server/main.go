@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 
 	appauth "github.com/sbezhuk/beebase-auth-service/internal/application/auth"
@@ -36,6 +37,19 @@ import (
 
 	transporthttp "github.com/sbezhuk/beebase-auth-service/internal/transport/http"
 )
+
+type sessionCleanupRequester struct {
+	deletion     *repopostgres.DeletionStore
+	notification *deletionclient.Client
+}
+
+func (c sessionCleanupRequester) RequestDeletion(ctx context.Context, userID uuid.UUID) error {
+	return c.deletion.RequestDeletion(ctx, userID)
+}
+
+func (c sessionCleanupRequester) DeleteSessionData(ctx context.Context, userID, sessionID uuid.UUID) error {
+	return c.notification.DeleteSessionData(ctx, userID, sessionID)
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -129,14 +143,16 @@ func run() error {
 		TOTPIssuer:              cfg.TOTPIssuer,
 	}
 
+	deletionStore := repopostgres.NewDeletionStore(db)
+	notificationCleanup := deletionclient.New(cfg.NotificationServiceURL, cfg.InternalServiceToken)
 	authService := appauth.NewService(
 		userRepo, refreshTokenRepo, credentialRepo, loginChallengeRepo, passwordResetFlowRepo,
 		hasher, tokenIssuer, sessions, mediaClient, apiaryClient, totpCipher, security,
-		repopostgres.NewDeletionStore(db),
+		sessionCleanupRequester{deletion: deletionStore, notification: notificationCleanup},
 	)
 	jobStore := repopostgres.NewDeletionJobStore(db)
 	cleanup := map[string]appauth.AccountCleanupClient{
-		"apiary": deletionclient.New(cfg.ApiaryServiceURL, cfg.InternalServiceToken), "hive": deletionclient.New(cfg.HiveServiceURL, cfg.InternalServiceToken), "inspection": deletionclient.New(cfg.InspectionServiceURL, cfg.InternalServiceToken), "harvest": deletionclient.New(cfg.HarvestServiceURL, cfg.InternalServiceToken), "media": deletionclient.New(cfg.MediaServiceURL, cfg.InternalServiceToken), "notification": deletionclient.New(cfg.NotificationServiceURL, cfg.InternalServiceToken), "subscription": deletionclient.New(cfg.SubscriptionServiceURL, cfg.InternalServiceToken),
+		"apiary": deletionclient.New(cfg.ApiaryServiceURL, cfg.InternalServiceToken), "hive": deletionclient.New(cfg.HiveServiceURL, cfg.InternalServiceToken), "inspection": deletionclient.New(cfg.InspectionServiceURL, cfg.InternalServiceToken), "harvest": deletionclient.New(cfg.HarvestServiceURL, cfg.InternalServiceToken), "media": deletionclient.New(cfg.MediaServiceURL, cfg.InternalServiceToken), "notification": notificationCleanup, "subscription": deletionclient.New(cfg.SubscriptionServiceURL, cfg.InternalServiceToken),
 	}
 	worker := appauth.NewDeletionWorker(jobStore, userRepo, cleanup, log)
 	go worker.Run(ctx, cfg.DeletionWorkerInterval)

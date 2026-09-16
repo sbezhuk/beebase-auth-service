@@ -34,10 +34,20 @@ type SessionActivator interface {
 	// superseding whatever was active before. ttl should match the
 	// session's own refresh-token TTL.
 	Activate(ctx context.Context, userID, sessionID uuid.UUID, ttl time.Duration) error
+	ActivateAndReturnPreviousWithGeneration(ctx context.Context, userID, sessionID uuid.UUID, ttl time.Duration) (uuid.UUID, bool, int64, error)
 	// Deactivate clears the active-session marker for userID, so its
 	// access token stops being accepted immediately rather than at its
 	// natural expiry.
 	Deactivate(ctx context.Context, userID uuid.UUID) error
+	DeactivateIfCurrent(ctx context.Context, userID, sessionID uuid.UUID) (bool, error)
+}
+
+type GenerationAccessTokenIssuer interface {
+	IssueWithGeneration(userID, sessionID uuid.UUID, generation int64) (token string, expiresAt time.Time, err error)
+}
+
+type SessionCleanupRequester interface {
+	DeleteSessionData(ctx context.Context, userID, sessionID uuid.UUID) error
 }
 
 // MediaClient is auth-service's dependency on media-service, used solely

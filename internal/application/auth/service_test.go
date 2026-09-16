@@ -215,12 +215,30 @@ func (f *fakeSessionStore) Activate(_ context.Context, userID, sessionID uuid.UU
 	return nil
 }
 
+func (f *fakeSessionStore) ActivateAndReturnPreviousWithGeneration(ctx context.Context, userID, sessionID uuid.UUID, ttl time.Duration) (uuid.UUID, bool, int64, error) {
+	f.mu.Lock()
+	previous, ok := f.active[userID]
+	f.active[userID] = sessionID
+	f.mu.Unlock()
+	return previous, ok, 1, nil
+}
+
 func (f *fakeSessionStore) Deactivate(_ context.Context, userID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	delete(f.active, userID)
 	return nil
+}
+
+func (f *fakeSessionStore) DeactivateIfCurrent(_ context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.active[userID] != sessionID {
+		return false, nil
+	}
+	delete(f.active, userID)
+	return true, nil
 }
 
 func (f *fakeSessionStore) IsActive(_ context.Context, userID, sessionID uuid.UUID) (bool, error) {
