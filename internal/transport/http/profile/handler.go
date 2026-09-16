@@ -161,7 +161,7 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, appauth.ErrAvatarNotFound):
 		httpx.WriteValidationError(w, map[string]string{"avatar": CodeAvatarNotFound})
 	case errors.Is(err, appauth.ErrOTPInvalid):
-		httpx.WriteError(w, http.StatusUnauthorized, CodeOTPInvalid, "invalid otp code")
+		httpx.WriteError(w, http.StatusBadRequest, CodeOTPInvalid, "invalid otp code")
 	case errors.Is(err, appauth.ErrOTPLocked):
 		httpx.WriteError(w, http.StatusTooManyRequests, CodeOTPLocked, "too many failed otp attempts")
 	default:

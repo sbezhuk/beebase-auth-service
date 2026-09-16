@@ -29,4 +29,5 @@ type Repository interface {
 	// service's database left to clean up manually. Returns ErrNotFound if
 	// id doesn't match an existing row.
 	Delete(ctx context.Context, id uuid.UUID) error
+	MarkDeletionPending(ctx context.Context, id uuid.UUID) error
 }

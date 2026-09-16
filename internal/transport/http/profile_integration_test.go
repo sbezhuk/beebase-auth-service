@@ -52,7 +52,7 @@ func TestProfileFlow_GetAndUpdate(t *testing.T) {
 	session, _ := registerAndCompleteSetup(t, client, srv, "profile-flow@example.com", "supersecret")
 
 	// GET before any edit: empty name, no avatar.
-	getResp := doProfileRequest(t, http.MethodGet, srv.URL+"/api/v1/profile", session.AccessToken, nil)
+	getResp := doProfileRequest(t, http.MethodGet, srv.URL+"/api/v1/profile/", session.AccessToken, nil)
 	if getResp.StatusCode != http.StatusOK {
 		t.Fatalf("get profile: status = %d, want %d", getResp.StatusCode, http.StatusOK)
 	}
@@ -173,7 +173,7 @@ func TestProfileFlow_UpdateWithMissingNameIsRejected(t *testing.T) {
 // TestProfileFlow_DeleteAccount is DeleteAccount's end-to-end proof: given
 // a valid TOTP code, DELETE /api/v1/profile succeeds, the account itself
 // is gone (even the caller's own still-cryptographically-valid access
-// token can no longer resolve to a user), and every session is revoked -
+// token is rejected by the session checker), and every session is revoked -
 // the refresh token cookie the same client jar holds from registration can
 // no longer mint a new access token, proving the local user row's ON
 // DELETE CASCADE actually reached refresh_tokens through the real schema,
@@ -184,16 +184,24 @@ func TestProfileFlow_DeleteAccount(t *testing.T) {
 
 	session, secret := registerAndCompleteSetup(t, client, srv, "delete-account@example.com", "supersecret")
 
-	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, map[string]string{
+	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile/", session.AccessToken, map[string]string{
 		"otp": genNextCode(t, secret),
 	})
 	if delResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete account: status = %d, want %d", delResp.StatusCode, http.StatusNoContent)
 	}
 
-	getResp := doProfileRequest(t, http.MethodGet, srv.URL+"/api/v1/profile", session.AccessToken, nil)
-	if getResp.StatusCode != http.StatusNotFound {
-		t.Fatalf("get profile after delete: status = %d, want %d", getResp.StatusCode, http.StatusNotFound)
+	getResp := doProfileRequest(t, http.MethodGet, srv.URL+"/api/v1/profile/", session.AccessToken, nil)
+	if getResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("access token after delete: status = %d, want %d", getResp.StatusCode, http.StatusUnauthorized)
+	}
+
+	loginResp := postJSON(t, http.DefaultClient, srv.URL+"/api/v1/auth/login", map[string]string{
+		"email":    "delete-account@example.com",
+		"password": "supersecret",
+	})
+	if loginResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("login after delete: status = %d, want %d", loginResp.StatusCode, http.StatusUnauthorized)
 	}
 
 	refreshResp := postJSON(t, client, srv.URL+"/api/v1/auth/refresh", nil)
@@ -202,14 +210,12 @@ func TestProfileFlow_DeleteAccount(t *testing.T) {
 	}
 
 	// Retrying the delete (e.g. a second tab, or a client retry after a
-	// dropped response) reports not found, not a silent second success -
-	// the otp's own validity doesn't matter once the account is already
-	// gone, since the account lookup fails first.
-	delResp2 := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, map[string]string{
+	// dropped response) is rejected by the invalidated access token.
+	delResp2 := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile/", session.AccessToken, map[string]string{
 		"otp": "000000",
 	})
-	if delResp2.StatusCode != http.StatusNotFound {
-		t.Fatalf("delete account again: status = %d, want %d", delResp2.StatusCode, http.StatusNotFound)
+	if delResp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("delete account again with invalidated access token: status = %d, want %d", delResp2.StatusCode, http.StatusUnauthorized)
 	}
 }
 
@@ -242,8 +248,8 @@ func TestProfileFlow_DeleteAccountWithWrongOtpKeepsAccountIntact(t *testing.T) {
 	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, map[string]string{
 		"otp": "000000",
 	})
-	if delResp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("delete account with wrong otp: status = %d, want %d", delResp.StatusCode, http.StatusUnauthorized)
+	if delResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("delete account with wrong otp: status = %d, want %d", delResp.StatusCode, http.StatusBadRequest)
 	}
 
 	getResp := doProfileRequest(t, http.MethodGet, srv.URL+"/api/v1/profile", session.AccessToken, nil)

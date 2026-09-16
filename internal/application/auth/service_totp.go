@@ -10,6 +10,7 @@ import (
 
 	"github.com/sbezhuk/beebase-auth-service/internal/domain/loginchallenge"
 	totpdomain "github.com/sbezhuk/beebase-auth-service/internal/domain/totp"
+	"github.com/sbezhuk/beebase-auth-service/internal/domain/user"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/tokenhash"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/totp"
 )
@@ -91,6 +92,9 @@ func (s *Service) SetupVerifyOTP(ctx context.Context, setupToken, code string) (
 	if err != nil {
 		return nil, err
 	}
+	if u.DeletionStatus == user.DeletionStatusPending {
+		return nil, ErrInvalidCredentials
+	}
 
 	return s.issueSession(ctx, u)
 }
@@ -131,6 +135,9 @@ func (s *Service) LoginVerifyOTP(ctx context.Context, challengeToken, code strin
 	u, err := s.users.GetByID(ctx, challenge.UserID)
 	if err != nil {
 		return nil, err
+	}
+	if u.DeletionStatus == user.DeletionStatusPending {
+		return nil, ErrChallengeInvalid
 	}
 
 	return s.issueSession(ctx, u)

@@ -316,7 +316,7 @@ func TestChangePassword_WrongOTP_PasswordUnchanged(t *testing.T) {
 // media), then media-service is swept for anything left over (e.g. an
 // avatar), then the user row itself is removed.
 func TestDeleteAccount_Success(t *testing.T) {
-	svc, _, media, apiaries := newTestServiceForDelete()
+	svc, _, sessions, media, apiaries := newTestServiceForDelete()
 	setup, err := svc.Register(context.Background(), appauth.RegisterInput{Email: "bee@example.com", Password: "supersecret"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
@@ -339,10 +339,13 @@ func TestDeleteAccount_Success(t *testing.T) {
 	if _, err := svc.CurrentUser(context.Background(), session.UserID); !errors.Is(err, user.ErrNotFound) {
 		t.Fatalf("CurrentUser after DeleteAccount: got %v, want ErrNotFound", err)
 	}
+	if sessions.HasActiveSession(session.UserID) {
+		t.Error("DeleteAccount left the user's access-token session active")
+	}
 }
 
 func TestDeleteAccount_UnknownUser(t *testing.T) {
-	svc, _, media, apiaries := newTestServiceForDelete()
+	svc, _, _, media, apiaries := newTestServiceForDelete()
 
 	if err := svc.DeleteAccount(context.Background(), uuid.New(), "access-token", "000000"); !errors.Is(err, user.ErrNotFound) {
 		t.Fatalf("DeleteAccount for unknown user: got %v, want ErrNotFound", err)
@@ -357,7 +360,7 @@ func TestDeleteAccount_UnknownUser(t *testing.T) {
 // request before either downstream service is ever called, leaving the
 // account (and everything it owns) completely untouched.
 func TestDeleteAccount_WrongOTP_AccountSurvives(t *testing.T) {
-	svc, _, media, apiaries := newTestServiceForDelete()
+	svc, _, _, media, apiaries := newTestServiceForDelete()
 	setup, err := svc.Register(context.Background(), appauth.RegisterInput{Email: "bee@example.com", Password: "supersecret"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
@@ -386,7 +389,7 @@ func TestDeleteAccount_WrongOTP_AccountSurvives(t *testing.T) {
 // permanently orphaned, unreachable through any API but never actually
 // removed.
 func TestDeleteAccount_AbortsOnApiaryCascadeFailure_AccountSurvives(t *testing.T) {
-	svc, _, media, apiaries := newTestServiceForDelete()
+	svc, _, _, media, apiaries := newTestServiceForDelete()
 	setup, err := svc.Register(context.Background(), appauth.RegisterInput{Email: "bee@example.com", Password: "supersecret"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
@@ -416,7 +419,7 @@ func TestDeleteAccount_AbortsOnApiaryCascadeFailure_AccountSurvives(t *testing.T
 // also stop the account itself from being deleted, even though
 // apiary-service's step already succeeded.
 func TestDeleteAccount_AbortsOnMediaSweepFailure_AccountSurvives(t *testing.T) {
-	svc, _, media, apiaries := newTestServiceForDelete()
+	svc, _, _, media, apiaries := newTestServiceForDelete()
 	setup, err := svc.Register(context.Background(), appauth.RegisterInput{Email: "bee@example.com", Password: "supersecret"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)

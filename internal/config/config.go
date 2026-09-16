@@ -56,7 +56,14 @@ type Config struct {
 	// ApiaryServiceURL is apiary-service's base URL. Deleting an account
 	// cascades to every apiary the caller owns (and, transitively, their
 	// hives, inspections, and media).
-	ApiaryServiceURL string
+	ApiaryServiceURL       string
+	HiveServiceURL         string
+	InspectionServiceURL   string
+	HarvestServiceURL      string
+	NotificationServiceURL string
+	SubscriptionServiceURL string
+	InternalServiceToken   string
+	DeletionWorkerInterval time.Duration
 
 	// TOTPEncryptionKey is a standard-base64-encoded 32-byte AES-256 key
 	// used to encrypt TOTP secrets at rest. Decoding and length validation
@@ -108,6 +115,7 @@ func Load() (*Config, error) {
 
 		MediaServiceURL:  getEnv("MEDIA_SERVICE_URL", ""),
 		ApiaryServiceURL: getEnv("APIARY_SERVICE_URL", ""),
+		HiveServiceURL:   getEnv("HIVE_SERVICE_URL", ""), InspectionServiceURL: getEnv("INSPECTION_SERVICE_URL", ""), HarvestServiceURL: getEnv("HARVEST_SERVICE_URL", ""), NotificationServiceURL: getEnv("NOTIFICATION_SERVICE_URL", ""), SubscriptionServiceURL: getEnv("SUBSCRIPTION_SERVICE_URL", ""), InternalServiceToken: getEnv("INTERNAL_SERVICE_TOKEN", ""), DeletionWorkerInterval: getDuration("DELETION_WORKER_INTERVAL", 5*time.Second),
 
 		TOTPEncryptionKey: getEnv("TOTP_ENCRYPTION_KEY", ""),
 		TOTPIssuer:        getEnv("TOTP_ISSUER", "BeeBase"),
@@ -135,6 +143,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.ApiaryServiceURL == "" {
 		return nil, fmt.Errorf("config: APIARY_SERVICE_URL is required")
+	}
+	for name, value := range map[string]string{"HIVE_SERVICE_URL": cfg.HiveServiceURL, "INSPECTION_SERVICE_URL": cfg.InspectionServiceURL, "HARVEST_SERVICE_URL": cfg.HarvestServiceURL, "NOTIFICATION_SERVICE_URL": cfg.NotificationServiceURL, "SUBSCRIPTION_SERVICE_URL": cfg.SubscriptionServiceURL, "INTERNAL_SERVICE_TOKEN": cfg.InternalServiceToken} {
+		if value == "" { return nil, fmt.Errorf("config: %s is required", name) }
 	}
 	if cfg.TOTPEncryptionKey == "" {
 		return nil, fmt.Errorf("config: TOTP_ENCRYPTION_KEY is required")

@@ -143,21 +143,24 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SessionResponse" }
         "400":
-          description: Request failed validation (missing/malformed setup_token or otp).
+          description: Request failed validation (missing/malformed setup_token or otp), or code otp_invalid (wrong code).
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/ErrorResponse"
         "401":
           description: >
             code totp_setup_token_invalid (unknown/expired/superseded
-            setup_token), otp_invalid (wrong code), or otp_locked (too
-            many failed attempts on this account — see
+            setup_token), or otp_locked (too many failed attempts on this
+            account — see
             TOTP_MAX_FAILED_ATTEMPTS).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "429":
-          description: code otp_locked. Same meaning as the 401 case above.
+          description: code otp_locked (too many failed attempts on this account).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -228,20 +231,23 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SessionResponse" }
         "400":
-          description: Request failed validation (missing/malformed challenge_token or otp).
+          description: Request failed validation (missing/malformed challenge_token or otp), or code otp_invalid (wrong code).
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/ErrorResponse"
         "401":
           description: >
             code login_challenge_invalid (unknown/expired/already-used
-            challenge_token), otp_invalid (wrong code), or otp_locked (too
-            many failed attempts on this account).
+            challenge_token), or otp_locked (too many failed attempts on this
+            account).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "429":
-          description: code otp_locked. Same meaning as the 401 case above.
+          description: code otp_locked (too many failed attempts on this account).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -270,21 +276,24 @@ paths:
         "400":
           description: >
             Request failed validation, including new_password not
-            matching the existing password policy or a malformed otp.
+            matching the existing password policy or a malformed otp, or code
+            otp_invalid (wrong code).
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/ErrorResponse"
         "401":
           description: >
             No Authorization header (code missing_authorization), an
-            invalid/expired access token (code invalid_access_token),
-            code current_password_invalid, code otp_invalid, or code
-            otp_locked.
+            invalid/expired access token (code invalid_access_token), or code
+            current_password_invalid.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "429":
-          description: code otp_locked. Same meaning as the 401 case above.
+          description: code otp_locked (too many failed attempts on this account).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -346,18 +355,14 @@ paths:
           description: >
             Request failed validation (ValidationErrorResponse), or code
             password_reset_flow_invalid — unknown/expired/consumed/
-            already-verified flow_token (plain ErrorResponse, no fields).
+            already-verified flow_token (plain ErrorResponse, no fields), or
+            code otp_invalid (wrong code).
           content:
             application/json:
               schema:
                 oneOf:
                   - $ref: "#/components/schemas/ValidationErrorResponse"
                   - $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: code otp_invalid (wrong code).
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
         "429":
           description: >
             code otp_locked — this flow's own attempt cap is exhausted;

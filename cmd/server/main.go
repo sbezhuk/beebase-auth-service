@@ -17,6 +17,7 @@ import (
 	appauth "github.com/sbezhuk/beebase-auth-service/internal/application/auth"
 	"github.com/sbezhuk/beebase-auth-service/internal/config"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/apiaryclient"
+	"github.com/sbezhuk/beebase-auth-service/internal/platform/deletionclient"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/jwtauth"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/mediaclient"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/password"
@@ -131,7 +132,14 @@ func run() error {
 	authService := appauth.NewService(
 		userRepo, refreshTokenRepo, credentialRepo, loginChallengeRepo, passwordResetFlowRepo,
 		hasher, tokenIssuer, sessions, mediaClient, apiaryClient, totpCipher, security,
+		repopostgres.NewDeletionStore(db),
 	)
+	jobStore := repopostgres.NewDeletionJobStore(db)
+	cleanup := map[string]appauth.AccountCleanupClient{
+		"apiary": deletionclient.New(cfg.ApiaryServiceURL, cfg.InternalServiceToken), "hive": deletionclient.New(cfg.HiveServiceURL, cfg.InternalServiceToken), "inspection": deletionclient.New(cfg.InspectionServiceURL, cfg.InternalServiceToken), "harvest": deletionclient.New(cfg.HarvestServiceURL, cfg.InternalServiceToken), "media": deletionclient.New(cfg.MediaServiceURL, cfg.InternalServiceToken), "notification": deletionclient.New(cfg.NotificationServiceURL, cfg.InternalServiceToken), "subscription": deletionclient.New(cfg.SubscriptionServiceURL, cfg.InternalServiceToken),
+	}
+	worker := appauth.NewDeletionWorker(jobStore, userRepo, cleanup, log)
+	go worker.Run(ctx, cfg.DeletionWorkerInterval)
 
 	cookieOpts := httpx.CookieOptions{
 		Domain:   cfg.CookieDomain,

@@ -389,8 +389,8 @@ func TestAuthFlow_RegisterSetupThenMeAndLoginRequireOTP(t *testing.T) {
 		"challengeToken": otpRequired.ChallengeToken,
 		"otp":             "000000",
 	})
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("login/verify-otp with wrong code: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("login/verify-otp with wrong code: status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
 
 	// Logout: the jar presents the refresh_token cookie set by setup-verify.
@@ -505,8 +505,8 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 		"newPassword":     "brandnewpassword",
 		"otp":              "000000",
 	})
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("change-password wrong otp: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("change-password wrong otp: status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
 
 	resp = authedPost(srv.URL+"/api/v1/auth/change-password", map[string]string{

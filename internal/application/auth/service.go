@@ -56,6 +56,7 @@ type Service struct {
 	apiaries           ApiaryCascadeDeleter
 	cipher             *totpsecret.Cipher
 	security           SecurityConfig
+	deletion           DeletionRequester
 }
 
 // NewService constructs a Service.
@@ -72,7 +73,12 @@ func NewService(
 	apiaries ApiaryCascadeDeleter,
 	cipher *totpsecret.Cipher,
 	security SecurityConfig,
+	deletion ...DeletionRequester,
 ) *Service {
+	var dr DeletionRequester
+	if len(deletion) > 0 {
+		dr = deletion[0]
+	}
 	return &Service{
 		users:              users,
 		refreshTokens:      refreshTokens,
@@ -86,6 +92,7 @@ func NewService(
 		apiaries:           apiaries,
 		cipher:             cipher,
 		security:           security,
+		deletion:           dr,
 	}
 }
 
@@ -128,6 +135,9 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*LoginResult, error
 	}
 
 	if err := s.hasher.Verify(u.PasswordHash, in.Password); err != nil {
+		return nil, ErrInvalidCredentials
+	}
+	if u.DeletionStatus == user.DeletionStatusPending {
 		return nil, ErrInvalidCredentials
 	}
 
@@ -178,13 +188,17 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*Session, error
 		return nil, ErrInvalidRefreshToken
 	}
 
-	if err := s.refreshTokens.Revoke(ctx, rt.ID); err != nil {
-		return nil, fmt.Errorf("auth: revoke rotated token: %w", err)
-	}
-
 	u, err := s.users.GetByID(ctx, rt.UserID)
 	if err != nil {
-		return nil, err
+		return nil, ErrInvalidRefreshToken
+	}
+	if u.DeletionStatus == user.DeletionStatusPending {
+		_ = s.refreshTokens.RevokeAllForUser(ctx, rt.UserID)
+		return nil, ErrInvalidRefreshToken
+	}
+
+	if err := s.refreshTokens.Revoke(ctx, rt.ID); err != nil {
+		return nil, fmt.Errorf("auth: revoke rotated token: %w", err)
 	}
 
 	return s.issueSession(ctx, u)
@@ -302,7 +316,9 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, accessTok
 // revokes every session belonging to the account, since refresh_tokens,
 // two_factor_credentials, login_challenges, and password_reset_flows all
 // cascade from users via their own ON DELETE CASCADE foreign keys (see
-// user.Repository.Delete).
+// user.Repository.Delete). The shared session marker is deactivated
+// explicitly as well, because it lives outside PostgreSQL and therefore
+// cannot be covered by the database cascade.
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID, accessToken, otp string) error {
 	if _, err := s.users.GetByID(ctx, userID); err != nil {
 		return err
@@ -325,6 +341,19 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID, accessTok
 		return err
 	}
 
+	if s.deletion != nil {
+		if err := s.deletion.RequestDeletion(ctx, userID); err != nil {
+			return err
+		}
+		if err := s.refreshTokens.RevokeAllForUser(ctx, userID); err != nil {
+			return fmt.Errorf("auth: revoke sessions for deletion: %w", err)
+		}
+		if err := s.sessions.Deactivate(ctx, userID); err != nil {
+			return fmt.Errorf("auth: deactivate session for deletion: %w", err)
+		}
+		return nil
+	}
+
 	if err := s.apiaries.DeleteAllMine(ctx, accessToken); err != nil {
 		return err
 	}
@@ -333,7 +362,15 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID, accessTok
 		return err
 	}
 
-	return s.users.Delete(ctx, userID)
+	if err := s.users.Delete(ctx, userID); err != nil {
+		return err
+	}
+
+	if err := s.sessions.Deactivate(ctx, userID); err != nil {
+		return fmt.Errorf("auth: deactivate session after account deletion: %w", err)
+	}
+
+	return nil
 }
 
 // issueSession is the single choke point every login/refresh/setup path

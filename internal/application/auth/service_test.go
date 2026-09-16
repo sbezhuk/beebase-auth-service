@@ -126,6 +126,17 @@ func (f *fakeUserRepo) Delete(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (f *fakeUserRepo) MarkDeletionPending(_ context.Context, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.byID[id]
+	if !ok {
+		return user.ErrNotFound
+	}
+	u.DeletionStatus = user.DeletionStatusPending
+	return nil
+}
+
 type fakeTokenRepo struct {
 	mu     sync.Mutex
 	byID   map[uuid.UUID]*token.RefreshToken
@@ -218,6 +229,14 @@ func (f *fakeSessionStore) IsActive(_ context.Context, userID, sessionID uuid.UU
 
 	current, ok := f.active[userID]
 	return ok && current == sessionID, nil
+}
+
+func (f *fakeSessionStore) HasActiveSession(userID uuid.UUID) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	_, ok := f.active[userID]
+	return ok
 }
 
 // fakeMediaClient is an in-memory stand-in for media-service. owned holds
@@ -951,7 +970,7 @@ func TestUpdateProfile_StorageDeletionFailure_ErrorHandlingSemantics(t *testing.
 // (apiary-service and media-service), so a test can assert both were
 // actually called - or, for the abort-on-failure tests, that a later one
 // never was.
-func newTestServiceForDelete() (svc *appauth.Service, users *fakeUserRepo, media *fakeMediaClient, apiaries *fakeApiaryDeleter) {
+func newTestServiceForDelete() (svc *appauth.Service, users *fakeUserRepo, sessions *fakeSessionStore, media *fakeMediaClient, apiaries *fakeApiaryDeleter) {
 	users = newFakeUserRepo()
 	tokens := newFakeTokenRepo()
 	credentials := newFakeCredentialRepo()
@@ -961,10 +980,11 @@ func newTestServiceForDelete() (svc *appauth.Service, users *fakeUserRepo, media
 	issuer := newTestIssuer(time.Minute)
 	media = newFakeMediaClient()
 	apiaries = &fakeApiaryDeleter{}
+	sessions = newFakeSessionStore()
 	cipher := newTestCipher()
 
-	svc = appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, newFakeSessionStore(), media, apiaries, cipher, newTestSecurityConfig())
-	return svc, users, media, apiaries
+	svc = appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, sessions, media, apiaries, cipher, newTestSecurityConfig())
+	return svc, users, sessions, media, apiaries
 }
 
 // DeleteAccount's own test suite lives in service_totp_test.go, alongside

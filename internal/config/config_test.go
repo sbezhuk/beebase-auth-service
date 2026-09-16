@@ -18,6 +18,12 @@ func setRequiredEnvExceptDatabaseURL(t *testing.T) {
 	t.Setenv("JWT_PRIVATE_KEY", "test-key")
 	t.Setenv("MEDIA_SERVICE_URL", "http://localhost:8085")
 	t.Setenv("APIARY_SERVICE_URL", "http://localhost:8082")
+	t.Setenv("HIVE_SERVICE_URL", "http://localhost:8083")
+	t.Setenv("INSPECTION_SERVICE_URL", "http://localhost:8084")
+	t.Setenv("HARVEST_SERVICE_URL", "http://localhost:8087")
+	t.Setenv("NOTIFICATION_SERVICE_URL", "http://localhost:8088")
+	t.Setenv("SUBSCRIPTION_SERVICE_URL", "http://localhost:8089")
+	t.Setenv("INTERNAL_SERVICE_TOKEN", "test-token")
 	t.Setenv("TOTP_ENCRYPTION_KEY", "test-key")
 }
 

@@ -73,3 +73,28 @@ type MediaClient interface {
 type ApiaryCascadeDeleter interface {
 	DeleteAllMine(ctx context.Context, accessToken string) error
 }
+
+// DeletionRequester atomically transitions an account into deletion_pending
+// and records the durable cleanup job and its service steps.
+type DeletionRequester interface {
+	RequestDeletion(ctx context.Context, userID uuid.UUID) error
+}
+
+type DeletionStep struct {
+	Service, Status string
+	AttemptCount    int
+}
+type DeletionJob struct {
+	ID, UserID uuid.UUID
+	Steps      []DeletionStep
+}
+type DeletionJobStore interface {
+	ClaimDeletion(ctx context.Context) (*DeletionJob, error)
+	CompleteDeletionStep(ctx context.Context, jobID uuid.UUID, service string) error
+	RetryDeletionStep(ctx context.Context, jobID uuid.UUID, service string, attempt int, errText string) error
+	CompleteDeletionJob(ctx context.Context, jobID uuid.UUID) error
+}
+
+type AccountCleanupClient interface {
+	DeleteUserData(context.Context, uuid.UUID) error
+}

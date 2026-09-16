@@ -27,9 +27,15 @@ type User struct {
 	// application/auth.Service.UpdateProfile).
 	AvatarMediaID *uuid.UUID
 
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	DeletionStatus string
 }
+
+const (
+	DeletionStatusActive  = "active"
+	DeletionStatusPending = "deletion_pending"
+)
 
 // New constructs a User with a freshly generated ID and timestamps set to
 // now. Callers are expected to have already hashed the password. The
@@ -38,11 +44,12 @@ type User struct {
 func New(email, passwordHash string) *User {
 	now := time.Now().UTC()
 	return &User{
-		ID:           uuid.New(),
-		Email:        email,
-		PasswordHash: passwordHash,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:             uuid.New(),
+		Email:          email,
+		PasswordHash:   passwordHash,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		DeletionStatus: DeletionStatusActive,
 	}
 }
 

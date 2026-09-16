@@ -46,7 +46,7 @@ func (r *UserRepository) Create(ctx context.Context, u *user.User) error {
 
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*user.User, error) {
 	const q = `
-		SELECT id, email, password_hash, first_name, last_name, avatar_media_id, created_at, updated_at
+		SELECT id, email, password_hash, first_name, last_name, avatar_media_id, created_at, updated_at, deletion_status
 		FROM users
 		WHERE email = $1
 	`
@@ -55,7 +55,7 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*user.Us
 
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*user.User, error) {
 	const q = `
-		SELECT id, email, password_hash, first_name, last_name, avatar_media_id, created_at, updated_at
+		SELECT id, email, password_hash, first_name, last_name, avatar_media_id, created_at, updated_at, deletion_status
 		FROM users
 		WHERE id = $1
 	`
@@ -117,13 +117,27 @@ func (r *UserRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (r *UserRepository) MarkDeletionPending(ctx context.Context, id uuid.UUID) error {
+	const q = `UPDATE users SET deletion_status = 'deletion_pending', updated_at = now() WHERE id = $1 AND deletion_status = 'active'`
+	tag, err := r.db.Exec(ctx, q, id)
+	if err != nil {
+		return fmt.Errorf("postgres: mark deletion pending: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		if _, err := r.GetByID(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *UserRepository) scanOne(ctx context.Context, q string, arg any) (*user.User, error) {
 	var u user.User
 
 	err := r.db.QueryRow(ctx, q, arg).Scan(
 		&u.ID, &u.Email, &u.PasswordHash,
 		&u.FirstName, &u.LastName, &u.AvatarMediaID,
-		&u.CreatedAt, &u.UpdatedAt,
+		&u.CreatedAt, &u.UpdatedAt, &u.DeletionStatus,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
