@@ -2,8 +2,6 @@ module github.com/sbezhuk/beebase-auth-service
 
 go 1.27.0
 
-replace github.com/sbezhuk/beebase-common => ../beebase-common
-
 require (
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -11,7 +9,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/pquerna/otp v1.5.0
-	github.com/sbezhuk/beebase-common v1.2.0-rc4
+	github.com/sbezhuk/beebase-common v1.4.0-rc1
 	golang.org/x/crypto v0.55.0
 )
 
