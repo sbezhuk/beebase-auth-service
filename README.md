@@ -91,11 +91,22 @@ is never used as a fallback, in development or in production.
 | `HTTP_SHUTDOWN_TIMEOUT`     | `15s`                        | Max time to wait for graceful shutdown    |
 | `DATABASE_URL`              | *(required)*                 | PostgreSQL DSN                            |
 | `DATABASE_CONNECT_TIMEOUT`  | `5s`                         | Timeout for the initial DB connection      |
+| `REDIS_ADDR`                | *(required)*                 | Shared Redis session store for token revocation and session-generation checks |
+| `REDIS_CONNECT_TIMEOUT`     | `5s`                         | Timeout for the initial Redis connection   |
 | `JWT_PRIVATE_KEY`           | *(required)*                 | Base64-encoded Ed25519 private key (`make keygen`) |
 | `ACCESS_TOKEN_TTL`          | `15m`                        | Access token lifetime                      |
 | `REFRESH_TOKEN_TTL`         | `720h` (30 days)             | Refresh token lifetime                     |
 | `MEDIA_SERVICE_URL`         | *(required)*                 | media-service's base URL, used to verify ownership of a profile's avatar and, on account deletion, to sweep up the caller's remaining media |
 | `APIARY_SERVICE_URL`        | *(required)*                 | apiary-service's base URL, used on account deletion to cascade every apiary the caller owns |
+| `HIVE_SERVICE_URL`          | *(required)*                 | hive-service base URL used during account-deletion cleanup |
+| `INSPECTION_SERVICE_URL`    | *(required)*                 | inspection-service base URL used during account-deletion cleanup |
+| `HARVEST_SERVICE_URL`       | *(required)*                 | harvest-service base URL used during account-deletion cleanup |
+| `NOTIFICATION_SERVICE_URL`  | *(required)*                 | notification-service base URL used to remove notification data |
+| `SUBSCRIPTION_SERVICE_URL`  | *(required)*                 | subscription-service base URL used to remove subscription data |
+| `INTERNAL_SERVICE_TOKEN`    | *(required)*                 | Shared credential for authenticated cross-service cleanup calls |
+| `DELETION_WORKER_INTERVAL`  | `5s`                         | Poll interval for queued account-deletion jobs |
+| `COOKIE_DOMAIN`             | *(empty)*                    | Optional refresh-cookie domain; empty keeps it host-only |
+| `COOKIE_SECURE`             | environment-dependent        | Whether the refresh cookie requires HTTPS |
 | `TOTP_ENCRYPTION_KEY`       | *(required)*                 | Base64-encoded 32-byte AES-256 key encrypting TOTP secrets at rest (`openssl rand -base64 32`) |
 | `TOTP_ISSUER`               | `BeeBase`                    | Label shown in a user's authenticator app |
 | `TOTP_SETUP_TOKEN_TTL`      | `15m`                        | How long a pending 2FA setup challenge stays valid |
