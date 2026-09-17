@@ -435,6 +435,7 @@ func (s *Service) issueSession(ctx context.Context, u *user.User) (*Session, err
 	return &Session{
 		UserID:                u.ID,
 		Email:                 u.Email,
+		CreatedAt:             u.CreatedAt,
 		AccessToken:           accessToken,
 		AccessTokenExpiresAt:  expiresAt,
 		RefreshToken:          rawRefresh,

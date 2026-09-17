@@ -23,6 +23,7 @@ type LoginInput struct {
 type Session struct {
 	UserID                uuid.UUID
 	Email                 string
+	CreatedAt             time.Time
 	AccessToken           string
 	AccessTokenExpiresAt  time.Time
 	RefreshToken          string

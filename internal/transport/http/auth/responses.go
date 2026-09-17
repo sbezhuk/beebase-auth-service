@@ -38,8 +38,9 @@ func newSessionResponse(s *appauth.Session) SessionResponse {
 		AccessTokenExpiresAt:  s.AccessTokenExpiresAt.Unix(),
 		RefreshTokenExpiresAt: s.RefreshTokenExpiresAt.Unix(),
 		User: UserResponse{
-			ID:    s.UserID,
-			Email: s.Email,
+			ID:        s.UserID,
+			Email:     s.Email,
+			CreatedAt: s.CreatedAt,
 		},
 	}
 }

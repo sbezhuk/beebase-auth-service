@@ -122,10 +122,14 @@ func TestDemoCode_IsRejectedForOtherAccounts(t *testing.T) {
 // --- LoginVerifyOTP ---
 
 func TestLoginVerifyOTP_Success(t *testing.T) {
-	svc, _, _ := newTestService()
+	svc, users, _ := newTestService()
 	setup, err := svc.Register(context.Background(), appauth.RegisterInput{Email: "bee@example.com", Password: "supersecret"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
+	}
+	registeredUser, err := users.GetByEmail(context.Background(), "bee@example.com")
+	if err != nil {
+		t.Fatalf("GetByEmail: %v", err)
 	}
 	if _, err := svc.SetupVerifyOTP(context.Background(), setup.SetupToken, genCode(t, setup.Secret)); err != nil {
 		t.Fatalf("SetupVerifyOTP: %v", err)
@@ -142,6 +146,9 @@ func TestLoginVerifyOTP_Success(t *testing.T) {
 	}
 	if session.AccessToken == "" || session.RefreshToken == "" {
 		t.Error("LoginVerifyOTP did not issue a full session")
+	}
+	if !session.CreatedAt.Equal(registeredUser.CreatedAt) {
+		t.Errorf("session.CreatedAt = %v, want registered user timestamp %v", session.CreatedAt, registeredUser.CreatedAt)
 	}
 }
 
