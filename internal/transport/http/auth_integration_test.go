@@ -370,7 +370,7 @@ func TestAuthFlow_RegisterSetupThenMeAndLoginRequireOTP(t *testing.T) {
 	srv := newTestServer(t)
 	client := newHTTPClient(t)
 
-	session, _ := registerAndCompleteSetup(t, client, srv, "flow@example.com", "supersecret")
+	session, _ := registerAndCompleteSetup(t, client, srv, "flow@example.com", "supersecret1!")
 
 	// Me, with the session issued by setup-verify.
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/auth/me", nil)
@@ -391,7 +391,7 @@ func TestAuthFlow_RegisterSetupThenMeAndLoginRequireOTP(t *testing.T) {
 	// Login now returns an OTP challenge, not a session.
 	resp := postJSON(t, client, srv.URL+"/api/v1/auth/login", map[string]string{
 		"email":    "flow@example.com",
-		"password": "supersecret",
+		"password": "supersecret1!",
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("login: status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -429,7 +429,7 @@ func TestAuthFlow_FullOTPCycle(t *testing.T) {
 
 	resp := postJSON(t, client, srv.URL+"/api/v1/auth/register", map[string]string{
 		"email":    "fullcycle@example.com",
-		"password": "supersecret",
+		"password": "supersecret1!",
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register: status = %d, want %d", resp.StatusCode, http.StatusCreated)
@@ -447,7 +447,7 @@ func TestAuthFlow_FullOTPCycle(t *testing.T) {
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/login", map[string]string{
 		"email":    "fullcycle@example.com",
-		"password": "supersecret",
+		"password": "supersecret1!",
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("login: status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -496,7 +496,7 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 	srv := newTestServer(t)
 	client := newHTTPClient(t)
 
-	session, secret := registerAndCompleteSetup(t, client, srv, "changepw@example.com", "supersecret")
+	session, secret := registerAndCompleteSetup(t, client, srv, "changepw@example.com", "supersecret1!")
 
 	authedPost := func(url string, body any) *http.Response {
 		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(mustMarshal(t, body)))
@@ -511,7 +511,7 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 
 	resp := authedPost(srv.URL+"/api/v1/auth/change-password", map[string]string{
 		"currentPassword": "wrong-password",
-		"newPassword":     "brandnewpassword",
+		"newPassword":     "brandnewpassword1!",
 		"otp":             genCode(t, secret),
 	})
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -519,8 +519,8 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 	}
 
 	resp = authedPost(srv.URL+"/api/v1/auth/change-password", map[string]string{
-		"currentPassword": "supersecret",
-		"newPassword":     "brandnewpassword",
+		"currentPassword": "supersecret1!",
+		"newPassword":     "brandnewpassword1!",
 		"otp":             "000000",
 	})
 	if resp.StatusCode != http.StatusBadRequest {
@@ -528,8 +528,8 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 	}
 
 	resp = authedPost(srv.URL+"/api/v1/auth/change-password", map[string]string{
-		"currentPassword": "supersecret",
-		"newPassword":     "brandnewpassword",
+		"currentPassword": "supersecret1!",
+		"newPassword":     "brandnewpassword1!",
 		"otp":             genNextCode(t, secret),
 	})
 	if resp.StatusCode != http.StatusNoContent {
@@ -538,7 +538,7 @@ func TestAuthFlow_ChangePasswordRequiresOTP(t *testing.T) {
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/login", map[string]string{
 		"email":    "changepw@example.com",
-		"password": "brandnewpassword",
+		"password": "brandnewpassword1!",
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("login with new password: status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -552,7 +552,7 @@ func TestAuthFlow_PasswordResetCycle(t *testing.T) {
 	srv := newTestServer(t)
 	client := newHTTPClient(t)
 
-	_, secret := registerAndCompleteSetup(t, client, srv, "forgot@example.com", "supersecret")
+	_, secret := registerAndCompleteSetup(t, client, srv, "forgot@example.com", "supersecret1!")
 
 	resp := postJSON(t, client, srv.URL+"/api/v1/auth/password-reset/request", map[string]string{
 		"email": "forgot@example.com",
@@ -570,8 +570,8 @@ func TestAuthFlow_PasswordResetCycle(t *testing.T) {
 	// verified first.
 	confirmResp := postJSON(t, client, srv.URL+"/api/v1/auth/password-reset/confirm", map[string]string{
 		"resetToken":      requested.FlowToken,
-		"newPassword":     "brandnewpassword",
-		"confirmPassword": "brandnewpassword",
+		"newPassword":     "brandnewpassword1!",
+		"confirmPassword": "brandnewpassword1!",
 	})
 	if confirmResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("password-reset/confirm without OTP verify: status = %d, want %d", confirmResp.StatusCode, http.StatusBadRequest)
@@ -592,8 +592,8 @@ func TestAuthFlow_PasswordResetCycle(t *testing.T) {
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/password-reset/confirm", map[string]string{
 		"resetToken":      verified.ResetToken,
-		"newPassword":     "brandnewpassword",
-		"confirmPassword": "brandnewpassword",
+		"newPassword":     "brandnewpassword1!",
+		"confirmPassword": "brandnewpassword1!",
 	})
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("password-reset/confirm: status = %d, want %d", resp.StatusCode, http.StatusNoContent)
@@ -601,7 +601,7 @@ func TestAuthFlow_PasswordResetCycle(t *testing.T) {
 
 	resp = postJSON(t, client, srv.URL+"/api/v1/auth/login", map[string]string{
 		"email":    "forgot@example.com",
-		"password": "brandnewpassword",
+		"password": "brandnewpassword1!",
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("login with new password: status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -645,7 +645,7 @@ func TestAuthFlow_LoginWithWrongPassword(t *testing.T) {
 
 	resp := postJSON(t, client, srv.URL+"/api/v1/auth/register", map[string]string{
 		"email":    "wrongpass@example.com",
-		"password": "correct-password",
+		"password": "correct-password1!",
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register: status = %d, want %d", resp.StatusCode, http.StatusCreated)

@@ -5,21 +5,31 @@ import (
 	"net/http"
 	"net/mail"
 	"strings"
+	"unicode"
 
 	"github.com/sbezhuk/beebase-common/httpx"
 )
 
 const minPasswordLength = 8
+
+// passwordSpecialChars are the characters accepted as "special characters"
+// by validatePassword. Kept narrow and explicit (rather than "anything
+// non-alphanumeric") so the rule is easy to state to users and to mirror
+// exactly on the Flutter client.
+const passwordSpecialChars = "!@#$%^&*()_+-=[]{}|;:,.<>?"
+
 const otpLength = 6
 
 // Field validation error codes. Each is a stable key a client can map to a
 // localized message; the field carrying no error is simply absent from the
 // response's "fields" map.
 const (
-	CodeEmailRequired    = "email_required"
-	CodeEmailInvalid     = "email_invalid"
-	CodePasswordRequired = "password_required"
-	CodePasswordTooShort = "password_too_short"
+	CodeEmailRequired              = "email_required"
+	CodeEmailInvalid               = "email_invalid"
+	CodePasswordRequired           = "password_required"
+	CodePasswordTooShort           = "password_too_short"
+	CodePasswordMissingDigit       = "password_missing_digit"
+	CodePasswordMissingSpecialChar = "password_missing_special_char"
 
 	CodeOTPRequired             = "otp_required"
 	CodeOTPInvalidFormat        = "otp_invalid_format"
@@ -100,11 +110,31 @@ func validateEmail(email string) string {
 	return ""
 }
 
+// validatePassword enforces the password strength policy applied whenever a
+// new password is created or set (registration, password reset, change
+// password). It is deliberately not used by LoginRequest.Validate: existing
+// users must still be able to sign in with passwords that predate this
+// policy.
 func validatePassword(password string) string {
 	if len(password) < minPasswordLength {
 		return CodePasswordTooShort
 	}
+	if !containsDigit(password) {
+		return CodePasswordMissingDigit
+	}
+	if !strings.ContainsAny(password, passwordSpecialChars) {
+		return CodePasswordMissingSpecialChar
+	}
 	return ""
+}
+
+func containsDigit(s string) bool {
+	for _, r := range s {
+		if unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // validateOTP checks that code has the shape of a Google Authenticator

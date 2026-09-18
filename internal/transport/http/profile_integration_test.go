@@ -49,7 +49,7 @@ func TestProfileFlow_GetAndUpdate(t *testing.T) {
 	srv := newTestServer(t, avatarID)
 
 	client := newHTTPClient(t)
-	session, _ := registerAndCompleteSetup(t, client, srv, "profile-flow@example.com", "supersecret")
+	session, _ := registerAndCompleteSetup(t, client, srv, "profile-flow@example.com", "supersecret1!")
 
 	// GET before any edit: empty name, no avatar.
 	getResp := doProfileRequest(t, http.MethodGet, srv.URL+"/api/v1/profile/", session.AccessToken, nil)
@@ -98,10 +98,10 @@ func TestProfileFlow_CannotUpdateAnotherUsersProfile(t *testing.T) {
 	client := newHTTPClient(t)
 
 	// Register two accounts.
-	session1, _ := registerAndCompleteSetup(t, client, srv, "user-one@example.com", "supersecret")
+	session1, _ := registerAndCompleteSetup(t, client, srv, "user-one@example.com", "supersecret1!")
 
 	client2 := newHTTPClient(t)
-	session2, _ := registerAndCompleteSetup(t, client2, srv, "user-two@example.com", "supersecret")
+	session2, _ := registerAndCompleteSetup(t, client2, srv, "user-two@example.com", "supersecret1!")
 
 	// user-one updates their own profile.
 	putResp := doProfileRequest(t, http.MethodPut, srv.URL+"/api/v1/profile", session1.AccessToken, map[string]any{
@@ -143,7 +143,7 @@ func TestProfileFlow_UpdateWithUnownedAvatarIsRejected(t *testing.T) {
 	srv := newTestServer(t) // stub media client owns nothing
 	client := newHTTPClient(t)
 
-	session, _ := registerAndCompleteSetup(t, client, srv, "unowned-avatar@example.com", "supersecret")
+	session, _ := registerAndCompleteSetup(t, client, srv, "unowned-avatar@example.com", "supersecret1!")
 
 	putResp := doProfileRequest(t, http.MethodPut, srv.URL+"/api/v1/profile", session.AccessToken, map[string]any{
 		"firstName": "Jane",
@@ -159,7 +159,7 @@ func TestProfileFlow_UpdateWithMissingNameIsRejected(t *testing.T) {
 	srv := newTestServer(t)
 	client := newHTTPClient(t)
 
-	session, _ := registerAndCompleteSetup(t, client, srv, "missing-name@example.com", "supersecret")
+	session, _ := registerAndCompleteSetup(t, client, srv, "missing-name@example.com", "supersecret1!")
 
 	putResp := doProfileRequest(t, http.MethodPut, srv.URL+"/api/v1/profile", session.AccessToken, map[string]any{
 		"firstName": "",
@@ -182,7 +182,7 @@ func TestProfileFlow_DeleteAccount(t *testing.T) {
 	srv := newTestServer(t)
 	client := newHTTPClient(t)
 
-	session, secret := registerAndCompleteSetup(t, client, srv, "delete-account@example.com", "supersecret")
+	session, secret := registerAndCompleteSetup(t, client, srv, "delete-account@example.com", "supersecret1!")
 
 	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile/", session.AccessToken, map[string]string{
 		"otp": genNextCode(t, secret),
@@ -198,7 +198,7 @@ func TestProfileFlow_DeleteAccount(t *testing.T) {
 
 	loginResp := postJSON(t, http.DefaultClient, srv.URL+"/api/v1/auth/login", map[string]string{
 		"email":    "delete-account@example.com",
-		"password": "supersecret",
+		"password": "supersecret1!",
 	})
 	if loginResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("login after delete: status = %d, want %d", loginResp.StatusCode, http.StatusUnauthorized)
@@ -243,7 +243,7 @@ func TestProfileFlow_DeleteAccountWithWrongOtpKeepsAccountIntact(t *testing.T) {
 	srv := newTestServer(t)
 	client := newHTTPClient(t)
 
-	session, _ := registerAndCompleteSetup(t, client, srv, "delete-wrong-otp@example.com", "supersecret")
+	session, _ := registerAndCompleteSetup(t, client, srv, "delete-wrong-otp@example.com", "supersecret1!")
 
 	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, map[string]string{
 		"otp": "000000",
@@ -265,7 +265,7 @@ func TestProfileFlow_DeleteAccountWithMissingOtpIsRejected(t *testing.T) {
 	srv := newTestServer(t)
 	client := newHTTPClient(t)
 
-	session, _ := registerAndCompleteSetup(t, client, srv, "delete-missing-otp@example.com", "supersecret")
+	session, _ := registerAndCompleteSetup(t, client, srv, "delete-missing-otp@example.com", "supersecret1!")
 
 	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session.AccessToken, map[string]string{})
 	if delResp.StatusCode != http.StatusBadRequest {
@@ -287,8 +287,8 @@ func TestProfileFlow_DeleteAccountDoesNotAffectAnotherUser(t *testing.T) {
 	client1 := newHTTPClient(t)
 	client2 := newHTTPClient(t)
 
-	session1, secret1 := registerAndCompleteSetup(t, client1, srv, "delete-user-one@example.com", "supersecret")
-	session2, _ := registerAndCompleteSetup(t, client2, srv, "delete-user-two@example.com", "supersecret")
+	session1, secret1 := registerAndCompleteSetup(t, client1, srv, "delete-user-one@example.com", "supersecret1!")
+	session2, _ := registerAndCompleteSetup(t, client2, srv, "delete-user-two@example.com", "supersecret1!")
 
 	delResp := doProfileRequest(t, http.MethodDelete, srv.URL+"/api/v1/profile", session1.AccessToken, map[string]string{
 		"otp": genNextCode(t, secret1),
