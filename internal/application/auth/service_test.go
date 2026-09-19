@@ -5,6 +5,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -36,9 +38,10 @@ func newTestIssuer(ttl time.Duration) *jwtauth.Issuer {
 // --- in-memory fakes for the domain ports ---
 
 type fakeUserRepo struct {
-	mu      sync.Mutex
-	byID    map[uuid.UUID]*user.User
-	byEmail map[string]*user.User
+	mu               sync.Mutex
+	byID             map[uuid.UUID]*user.User
+	byEmail          map[string]*user.User
+	nextUpdatePwdErr error // one-shot fault injected into the next UpdatePassword call
 }
 
 func newFakeUserRepo() *fakeUserRepo {
@@ -101,6 +104,12 @@ func (f *fakeUserRepo) UpdatePassword(_ context.Context, id uuid.UUID, passwordH
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.nextUpdatePwdErr != nil {
+		err := f.nextUpdatePwdErr
+		f.nextUpdatePwdErr = nil
+		return err
+	}
+
 	u, ok := f.byID[id]
 	if !ok {
 		return user.ErrNotFound
@@ -110,6 +119,18 @@ func (f *fakeUserRepo) UpdatePassword(_ context.Context, id uuid.UUID, passwordH
 	u.UpdatedAt = time.Now().UTC()
 	f.byEmail[u.Email] = u
 	return nil
+}
+
+// failNextUpdatePassword makes the next UpdatePassword call return err
+// instead of succeeding - a one-shot fault used to prove that a failure in
+// the critical password-mutation step, occurring before a single-use
+// credential (a password-reset token) would be marked consumed, leaves
+// that credential untouched and a legitimate retry still possible. See
+// failNextActivate on fakeSessionStore for the same pattern.
+func (f *fakeUserRepo) failNextUpdatePassword(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextUpdatePwdErr = err
 }
 
 func (f *fakeUserRepo) Delete(_ context.Context, id uuid.UUID) error {
@@ -199,8 +220,9 @@ func (f *fakeTokenRepo) RevokeAllForUser(_ context.Context, userID uuid.UUID) er
 // tracking the one active session id per user the same way the real
 // Redis-backed store does.
 type fakeSessionStore struct {
-	mu     sync.Mutex
-	active map[uuid.UUID]uuid.UUID
+	mu         sync.Mutex
+	active     map[uuid.UUID]uuid.UUID
+	nextActErr error // one-shot fault injected into the next ActivateAndReturnPreviousWithGeneration call
 }
 
 func newFakeSessionStore() *fakeSessionStore {
@@ -215,8 +237,27 @@ func (f *fakeSessionStore) Activate(_ context.Context, userID, sessionID uuid.UU
 	return nil
 }
 
+// failNextActivate makes the next ActivateAndReturnPreviousWithGeneration
+// call return err instead of succeeding - a one-shot fault, automatically
+// cleared once triggered, standing in for a transient issueSession
+// dependency failure unrelated to session cleanup (e.g. Redis blipping),
+// used to prove a failed session issuance never leaves a login challenge
+// or setup token consumed (see TestLoginVerifyOTP_FailedIssuance... /
+// TestSetupVerifyOTP_FailedIssuance... in session_cleanup_test.go).
+func (f *fakeSessionStore) failNextActivate(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextActErr = err
+}
+
 func (f *fakeSessionStore) ActivateAndReturnPreviousWithGeneration(ctx context.Context, userID, sessionID uuid.UUID, ttl time.Duration) (uuid.UUID, bool, int64, error) {
 	f.mu.Lock()
+	if f.nextActErr != nil {
+		err := f.nextActErr
+		f.nextActErr = nil
+		f.mu.Unlock()
+		return uuid.Nil, false, 0, err
+	}
 	previous, ok := f.active[userID]
 	f.active[userID] = sessionID
 	f.mu.Unlock()
@@ -241,6 +282,22 @@ func (f *fakeSessionStore) DeactivateIfCurrent(_ context.Context, userID, sessio
 	return true, nil
 }
 
+// DeactivateAndReturnPrevious mirrors sessionstore.Store's atomic
+// GET-then-DEL: reading f.active[userID] and deleting it happen under the
+// same mutex hold here, exactly as the real implementation's Lua script
+// makes them a single Redis round trip - so a concurrent Activate for the
+// same user (a real goroutine test can race against this one) can never
+// land between the read and the delete.
+func (f *fakeSessionStore) DeactivateAndReturnPrevious(_ context.Context, userID uuid.UUID) (uuid.UUID, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	previous, ok := f.active[userID]
+	if ok {
+		delete(f.active, userID)
+	}
+	return previous, ok, nil
+}
+
 func (f *fakeSessionStore) IsActive(_ context.Context, userID, sessionID uuid.UUID) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -255,6 +312,18 @@ func (f *fakeSessionStore) HasActiveSession(userID uuid.UUID) bool {
 
 	_, ok := f.active[userID]
 	return ok
+}
+
+// activeSessionID exposes the raw active session id for a user, purely so
+// a test can establish ground truth (the id it expects a subsequent
+// DeactivateAndReturnPrevious-driven cleanup call to carry) - Session
+// itself never exposes its own session id, only the opaque tokens.
+func (f *fakeSessionStore) activeSessionID(userID uuid.UUID) (uuid.UUID, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	id, ok := f.active[userID]
+	return id, ok
 }
 
 // fakeMediaClient is an in-memory stand-in for media-service. owned holds
@@ -384,6 +453,14 @@ func genCodeAt(t *testing.T, secret string, at time.Time) string {
 	return code
 }
 
+// newTestLogger returns a *slog.Logger that discards everything it's given
+// - tests assert on behavior (returned values, fake call records), never
+// on log output, but Service still requires a non-nil logger for its
+// best-effort background cleanup work (see cleanupSessionDevices).
+func newTestLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 func newTestService() (*appauth.Service, *fakeUserRepo, *fakeTokenRepo) {
 	svc, users, tokens, _ := newTestServiceWithMedia()
 	return svc, users, tokens
@@ -401,8 +478,29 @@ func newTestServiceWithMedia(owned ...uuid.UUID) (*appauth.Service, *fakeUserRep
 	media := newFakeMediaClient(owned...)
 	cipher := newTestCipher()
 
-	svc := appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, sessions, media, &fakeApiaryDeleter{}, cipher, newTestSecurityConfig())
+	svc := appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, sessions, media, &fakeApiaryDeleter{}, cipher, newTestSecurityConfig(), newTestLogger())
 	return svc, users, tokens, media
+}
+
+// newTestServiceWithCleanup builds a Service wired with cleaner as its
+// session-cleanup dependency (see fakeSessionCleaner) and returns the
+// fakeSessionStore handle too, so a test can prime hadPrevious=true
+// directly (sessions.Activate) for flows - like SetupVerifyOTP - that
+// can't realistically reach that state through the public API alone.
+func newTestServiceWithCleanup(cleaner *fakeSessionCleaner) (svc *appauth.Service, users *fakeUserRepo, sessions *fakeSessionStore) {
+	users = newFakeUserRepo()
+	tokens := newFakeTokenRepo()
+	credentials := newFakeCredentialRepo()
+	challenges := newFakeLoginChallengeRepo()
+	resetFlows := newFakePasswordResetFlowRepo()
+	hasher := password.NewBcryptHasher(bcrypt.MinCost)
+	issuer := newTestIssuer(time.Minute)
+	sessions = newFakeSessionStore()
+	media := newFakeMediaClient()
+	cipher := newTestCipher()
+
+	svc = appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, sessions, media, &fakeApiaryDeleter{}, cipher, newTestSecurityConfig(), newTestLogger(), cleaner)
+	return svc, users, sessions
 }
 
 // mustRegister creates an account and walks it all the way through TOTP
@@ -634,7 +732,7 @@ func TestRefresh_ExpiredToken(t *testing.T) {
 	// Negative TTL: any refresh token issued by this service is already expired.
 	security := newTestSecurityConfig()
 	security.RefreshTTL = -time.Hour
-	svc := appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, newFakeSessionStore(), newFakeMediaClient(), &fakeApiaryDeleter{}, newTestCipher(), security)
+	svc := appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, newFakeSessionStore(), newFakeMediaClient(), &fakeApiaryDeleter{}, newTestCipher(), security, newTestLogger())
 
 	session := mustRegister(t, svc, "bee@example.com", "supersecret")
 
@@ -1001,7 +1099,33 @@ func newTestServiceForDelete() (svc *appauth.Service, users *fakeUserRepo, sessi
 	sessions = newFakeSessionStore()
 	cipher := newTestCipher()
 
-	svc = appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, sessions, media, apiaries, cipher, newTestSecurityConfig())
+	svc = appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, sessions, media, apiaries, cipher, newTestSecurityConfig(), newTestLogger())
+	return svc, users, sessions, media, apiaries
+}
+
+// newTestServiceForDeleteWithDeletionRequester mirrors
+// newTestServiceForDelete, but wires deletion in as the service's
+// DeletionRequester - the same production shape (see cmd/server/main.go's
+// sessionCleanupRequester), which every DeleteAccount test above this one
+// bypasses entirely by never passing one. With deletion present,
+// DeleteAccount takes the durable-job path (create the job, revoke
+// tokens, deactivate the session, return) instead of the direct
+// apiary/media cascade, so apiaries/media are still returned purely to
+// let a test assert they were *not* called.
+func newTestServiceForDeleteWithDeletionRequester(deletion appauth.DeletionRequester) (svc *appauth.Service, users *fakeUserRepo, sessions *fakeSessionStore, media *fakeMediaClient, apiaries *fakeApiaryDeleter) {
+	users = newFakeUserRepo()
+	tokens := newFakeTokenRepo()
+	credentials := newFakeCredentialRepo()
+	challenges := newFakeLoginChallengeRepo()
+	resetFlows := newFakePasswordResetFlowRepo()
+	hasher := password.NewBcryptHasher(bcrypt.MinCost)
+	issuer := newTestIssuer(time.Minute)
+	media = newFakeMediaClient()
+	apiaries = &fakeApiaryDeleter{}
+	sessions = newFakeSessionStore()
+	cipher := newTestCipher()
+
+	svc = appauth.NewService(users, tokens, credentials, challenges, resetFlows, hasher, issuer, sessions, media, apiaries, cipher, newTestSecurityConfig(), newTestLogger(), deletion)
 	return svc, users, sessions, media, apiaries
 }
 

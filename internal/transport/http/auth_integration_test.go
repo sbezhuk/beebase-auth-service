@@ -126,6 +126,16 @@ func (s *stubSessionStore) DeactivateIfCurrent(_ context.Context, userID, sessio
 	return true, nil
 }
 
+func (s *stubSessionStore) DeactivateAndReturnPrevious(_ context.Context, userID uuid.UUID) (uuid.UUID, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous, ok := s.active[userID]
+	if ok {
+		delete(s.active, userID)
+	}
+	return previous, ok, nil
+}
+
 func (s *stubSessionStore) IsActive(_ context.Context, userID, sessionID uuid.UUID) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -202,11 +212,11 @@ func newTestServer(t *testing.T, media ...uuid.UUID) *httptest.Server {
 		TOTPIssuer:              "BeeBase Test",
 	}
 
+	log := logger.New("development", "error")
 	svc := appauth.NewService(
 		userRepo, refreshTokenRepo, credentialRepo, loginChallengeRepo, passwordResetFlowRepo,
-		hasher, issuer, sessions, newStubMediaClient(media...), stubApiaryDeleter{}, cipher, security,
+		hasher, issuer, sessions, newStubMediaClient(media...), stubApiaryDeleter{}, cipher, security, log,
 	)
-	log := logger.New("development", "error")
 	cookieOpts := httpx.CookieOptions{SameSite: http.SameSiteLaxMode}
 	handler := authhttp.NewHandler(svc, log, cookieOpts)
 	profileHandler := profilehttp.NewHandler(svc, log)

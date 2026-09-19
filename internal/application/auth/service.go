@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -23,6 +24,13 @@ import (
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/totp"
 	"github.com/sbezhuk/beebase-auth-service/internal/platform/totpsecret"
 )
+
+// sessionCleanupTimeout bounds the best-effort, detached call that cleans
+// up a no-longer-valid session's push-notification device data (see
+// cleanupSessionDevices). It is intentionally its own timeout, independent
+// of the originating HTTP request's deadline, since the goroutine it
+// guards keeps running after that request has already been answered.
+const sessionCleanupTimeout = 15 * time.Second
 
 // SecurityConfig groups the numeric/duration knobs that tune 2FA and
 // password-recovery behavior. Grouped into one struct - rather than
@@ -57,9 +65,14 @@ type Service struct {
 	cipher             *totpsecret.Cipher
 	security           SecurityConfig
 	deletion           DeletionRequester
+	log                *slog.Logger
 }
 
-// NewService constructs a Service.
+// NewService constructs a Service. log is used only for best-effort
+// background work that has no caller left to report errors to (see
+// cleanupSessionDevices); it is never used to log anything on the
+// request path itself, which continues to communicate failure solely
+// through returned errors.
 func NewService(
 	users user.Repository,
 	refreshTokens token.Repository,
@@ -73,11 +86,15 @@ func NewService(
 	apiaries ApiaryCascadeDeleter,
 	cipher *totpsecret.Cipher,
 	security SecurityConfig,
+	log *slog.Logger,
 	deletion ...DeletionRequester,
 ) *Service {
 	var dr DeletionRequester
 	if len(deletion) > 0 {
 		dr = deletion[0]
+	}
+	if log == nil {
+		log = slog.Default()
 	}
 	return &Service{
 		users:              users,
@@ -93,6 +110,7 @@ func NewService(
 		cipher:             cipher,
 		security:           security,
 		deletion:           dr,
+		log:                log,
 	}
 }
 
@@ -209,6 +227,14 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*Session, error
 // rather than lingering until its own expiry. It is idempotent: presenting
 // an unknown or already-revoked token is not an error, since the desired
 // end state (neither token can be used) already holds.
+//
+// The authentication session is fully invalidated - refresh token revoked,
+// active-session marker cleared - before the (best-effort, detached)
+// device cleanup is even triggered, and logout's own success never depends
+// on that cleanup's outcome: notification-service being unreachable must
+// not turn an already-completed logout into an HTTP error. See
+// cleanupSessionDevices; this reuses the exact mechanism issueSession uses
+// for a session it replaces, rather than a separate implementation.
 func (s *Service) Logout(ctx context.Context, rawToken string) error {
 	rt, err := s.refreshTokens.GetByHash(ctx, tokenhash.Hash(rawToken))
 	if err != nil {
@@ -229,11 +255,8 @@ func (s *Service) Logout(ctx context.Context, rawToken string) error {
 	if _, err := s.sessions.DeactivateIfCurrent(ctx, rt.UserID, rt.ID); err != nil {
 		return fmt.Errorf("auth: deactivate session on logout: %w", err)
 	}
-	if cleaner, ok := s.deletion.(SessionCleanupRequester); ok {
-		if err := cleaner.DeleteSessionData(ctx, rt.UserID, rt.ID); err != nil {
-			return fmt.Errorf("auth: clean up logged-out session devices: %w", err)
-		}
-	}
+
+	s.cleanupSessionDevices(rt.UserID, rt.ID)
 
 	return nil
 }
@@ -414,11 +437,7 @@ func (s *Service) issueSession(ctx context.Context, u *user.User) (*Session, err
 		return nil, fmt.Errorf("auth: store refresh token: %w", err)
 	}
 	if hadPrevious {
-		if cleaner, ok := s.deletion.(SessionCleanupRequester); ok {
-			if err := cleaner.DeleteSessionData(ctx, u.ID, previous); err != nil {
-				return nil, fmt.Errorf("auth: clean up replaced session devices: %w", err)
-			}
-		}
+		s.cleanupSessionDevices(u.ID, previous)
 	}
 
 	var accessToken string
@@ -441,6 +460,45 @@ func (s *Service) issueSession(ctx context.Context, u *user.User) (*Session, err
 		RefreshToken:          rawRefresh,
 		RefreshTokenExpiresAt: rt.ExpiresAt,
 	}, nil
+}
+
+// cleanupSessionDevices best-effort deletes the push-notification device
+// data belonging to sessionID, a session that has just stopped being
+// valid - either superseded by a newly-issued one (issueSession) or
+// explicitly ended (Logout). It is the one shared mechanism every caller
+// with a no-longer-valid session to clean up after uses, rather than each
+// reimplementing its own goroutine/context/logging.
+//
+// This is deliberately fire-and-forget: notification-service being slow,
+// unreachable, or erroring must never fail, delay, or otherwise gate the
+// security-critical operation that triggered it (issuing a new session,
+// or completing a logout that has already revoked the old one) - see the
+// regressions this guards against in session_cleanup_test.go and
+// security_cleanup_test.go. Failures are only logged, with enough context
+// to chase down manually or from an alert, never returned to the caller.
+//
+// The cleanup runs past the lifetime of the request that triggered it, so
+// it must not inherit that request's context - ctx would already be
+// canceled by the time a slow notification-service responds, and canceling
+// the cleanup along with the (by-then-answered) HTTP request defeats the
+// whole point of not blocking on it. It gets its own bounded timeout
+// instead (sessionCleanupTimeout).
+func (s *Service) cleanupSessionDevices(userID, sessionID uuid.UUID) {
+	cleaner, ok := s.deletion.(SessionCleanupRequester)
+	if !ok {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), sessionCleanupTimeout)
+		defer cancel()
+		if err := cleaner.DeleteSessionData(ctx, userID, sessionID); err != nil {
+			s.log.Error("auth: clean up session devices",
+				"error", err,
+				"user_id", userID,
+				"session_id", sessionID,
+			)
+		}
+	}()
 }
 
 // issueLoginChallenge creates the OTP-required gate for a 2FA-enabled

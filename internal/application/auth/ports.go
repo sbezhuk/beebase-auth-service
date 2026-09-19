@@ -28,7 +28,9 @@ type AccessTokenIssuer interface {
 // user. It's what lets an access token be rejected the instant it's
 // superseded by a newer session, rather than staying valid until its own
 // JWT expiry. It's a port so the service doesn't depend on Redis
-// specifically; satisfied by *sessionstore.Store.
+// specifically; satisfied by *sessionstore.Store from beebase-common,
+// which owns the Redis key format and every operation's atomicity - this
+// package must never duplicate either.
 type SessionActivator interface {
 	// Activate marks sessionID as the only active session for userID,
 	// superseding whatever was active before. ttl should match the
@@ -40,6 +42,16 @@ type SessionActivator interface {
 	// natural expiry.
 	Deactivate(ctx context.Context, userID uuid.UUID) error
 	DeactivateIfCurrent(ctx context.Context, userID, sessionID uuid.UUID) (bool, error)
+	// DeactivateAndReturnPrevious atomically clears userID's active-session
+	// marker and reports which session, if any, was actually removed - the
+	// combination of "read what's active" and "clear it" a caller that
+	// needs both (to key a best-effort device cleanup off the exact
+	// session just invalidated - see application/auth.Service's
+	// ChangePassword and ConfirmPasswordReset) must never split into two
+	// separate calls, since that would race a session concurrently
+	// activated in between. Safe and idempotent when no session is
+	// active: returns hadPrevious=false with no error.
+	DeactivateAndReturnPrevious(ctx context.Context, userID uuid.UUID) (previousSessionID uuid.UUID, hadPrevious bool, err error)
 }
 
 type GenerationAccessTokenIssuer interface {

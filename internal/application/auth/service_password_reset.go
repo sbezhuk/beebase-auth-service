@@ -145,7 +145,23 @@ func (s *Service) VerifyPasswordResetOTP(ctx context.Context, flowToken, code st
 // required - so skipping straight to this endpoint is structurally
 // impossible, not just a policy choice. Every refresh token belonging to
 // the account is revoked, per BEEB-34's requirement that a password
-// recovery invalidates existing sessions.
+// recovery invalidates existing sessions - and, just as importantly, the
+// shared active-session marker is deactivated too: an access token that's
+// still unexpired is checked against that marker on every request (see
+// authmw.Verifier), never against the refresh token, so revoking only the
+// refresh token would leave a pre-reset access token silently accepted
+// for up to its own remaining JWT lifetime. ChangePassword already clears
+// both for the same reason; this mirrors it - including deferring the
+// invalidated session's push-notification device cleanup to the same
+// best-effort, asynchronous cleanupSessionDevices mechanism, so
+// notification-service's health can never affect this method's result.
+//
+// flow.Consume() still runs immediately after UpdatePassword succeeds,
+// before any of this - unchanged from the previous audit's fix. That
+// ordering is what guarantees the reset token can never be left
+// permanently consumed by a failure in a later, unrelated step (the
+// TOTP-class bug), while still being marked single-use the moment the
+// password mutation it gates has genuinely gone through.
 func (s *Service) ConfirmPasswordReset(ctx context.Context, resetToken, newPassword string) error {
 	flow, err := s.passwordResetFlows.GetByResetTokenHash(ctx, tokenhash.Hash(resetToken))
 	if err != nil {
@@ -175,6 +191,14 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, resetToken, newPassw
 
 	if err := s.refreshTokens.RevokeAllForUser(ctx, *flow.UserID); err != nil {
 		return fmt.Errorf("auth: revoke sessions after password reset: %w", err)
+	}
+
+	previousSessionID, hadPrevious, err := s.sessions.DeactivateAndReturnPrevious(ctx, *flow.UserID)
+	if err != nil {
+		return fmt.Errorf("auth: deactivate session after password reset: %w", err)
+	}
+	if hadPrevious {
+		s.cleanupSessionDevices(*flow.UserID, previousSessionID)
 	}
 
 	return nil

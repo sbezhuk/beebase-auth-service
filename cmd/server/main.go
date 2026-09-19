@@ -147,7 +147,7 @@ func run() error {
 	notificationCleanup := deletionclient.New(cfg.NotificationServiceURL, cfg.InternalServiceToken)
 	authService := appauth.NewService(
 		userRepo, refreshTokenRepo, credentialRepo, loginChallengeRepo, passwordResetFlowRepo,
-		hasher, tokenIssuer, sessions, mediaClient, apiaryClient, totpCipher, security,
+		hasher, tokenIssuer, sessions, mediaClient, apiaryClient, totpCipher, security, log,
 		sessionCleanupRequester{deletion: deletionStore, notification: notificationCleanup},
 	)
 	jobStore := repopostgres.NewDeletionJobStore(db)

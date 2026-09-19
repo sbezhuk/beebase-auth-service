@@ -88,6 +88,19 @@ func (s *Service) validateOTP(email string, cred *totpdomain.Credential, code st
 // credential becomes enabled and a full session is issued - this is the
 // only path that can ever turn a pending setup into "registration
 // complete."
+//
+// The credential is only marked enabled (and its now-used setup token
+// cleared) once issueSession has actually succeeded - never before. If
+// finalization happened first and issueSession then failed for any reason,
+// a legitimate retry with the very same (still otherwise-valid) setup
+// token would find it already consumed and be turned away with a
+// confusing "invalid or expired setup token", even though the OTP the
+// caller proved knowledge of was genuinely valid. The OTP itself is
+// already replay-proof independent of this ordering - verifyOTP durably
+// records its anti-replay counter (see Credential.RecordSuccess) before
+// this function does anything else - so deferring Enable()/Update this
+// way costs nothing in security, only in how early "setup complete" is
+// persisted.
 func (s *Service) SetupVerifyOTP(ctx context.Context, setupToken, code string) (*Session, error) {
 	cred, err := s.credentials.GetBySetupTokenHash(ctx, tokenhash.Hash(setupToken))
 	if err != nil {
@@ -110,22 +123,43 @@ func (s *Service) SetupVerifyOTP(ctx context.Context, setupToken, code string) (
 		return nil, err
 	}
 
+	if u.DeletionStatus == user.DeletionStatusPending {
+		return nil, ErrInvalidCredentials
+	}
+
+	session, err := s.issueSession(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+
 	cred.Enable()
 	if err := s.credentials.Update(ctx, cred); err != nil {
 		return nil, fmt.Errorf("auth: enable totp credential: %w", err)
 	}
 
-	if u.DeletionStatus == user.DeletionStatusPending {
-		return nil, ErrInvalidCredentials
-	}
-
-	return s.issueSession(ctx, u)
+	return session, nil
 }
 
 // LoginVerifyOTP completes a login begun by Login: challengeToken
 // identifies the pending challenge, code must be a currently-valid TOTP
 // for the account's enabled credential. On success the challenge is
 // consumed (single-use) and a full session is issued.
+//
+// The challenge is only consumed once issueSession has actually succeeded
+// - never before. Consuming it first and issuing the session second would
+// mean any failure in issueSession (including one entirely unrelated to
+// the challenge or the OTP, e.g. a downstream dependency blip) permanently
+// burns a challenge that was never actually used to complete a login; a
+// legitimate retry with the same challenge and a fresh valid OTP would
+// then be turned away with a misleading "invalid or expired login
+// challenge" - indistinguishable, from the caller's side, from their
+// session having genuinely expired. The OTP itself is already
+// replay-proof independent of this ordering - verifyOTP durably records
+// its anti-replay counter (see Credential.RecordSuccess) before this
+// function does anything else - so deferring Consume this way costs
+// nothing in security: a captured request still can't be replayed with
+// the same OTP, and once Consume does run (immediately after a real
+// success), the challenge is single-use exactly as before.
 func (s *Service) LoginVerifyOTP(ctx context.Context, challengeToken, code string) (*Session, error) {
 	challenge, err := s.loginChallenges.GetByHash(ctx, tokenhash.Hash(challengeToken))
 	if err != nil {
@@ -156,15 +190,20 @@ func (s *Service) LoginVerifyOTP(ctx context.Context, challengeToken, code strin
 		return nil, err
 	}
 
-	if err := s.loginChallenges.Consume(ctx, challenge.ID); err != nil {
-		return nil, fmt.Errorf("auth: consume login challenge: %w", err)
-	}
-
 	if u.DeletionStatus == user.DeletionStatusPending {
 		return nil, ErrChallengeInvalid
 	}
 
-	return s.issueSession(ctx, u)
+	session, err := s.issueSession(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.loginChallenges.Consume(ctx, challenge.ID); err != nil {
+		return nil, fmt.Errorf("auth: consume login challenge: %w", err)
+	}
+
+	return session, nil
 }
 
 // ChangePassword replaces userID's password. in.CurrentPassword must match
@@ -175,6 +214,17 @@ func (s *Service) LoginVerifyOTP(ctx context.Context, challengeToken, code strin
 // session immediately deactivated - so its access token stops being
 // accepted right away too - as a defense-in-depth measure, since a
 // password change is itself a credential-security event.
+//
+// Session invalidation (RevokeAllForUser, DeactivateAndReturnPrevious)
+// remains synchronous and must succeed for ChangePassword itself to
+// succeed - it is security-critical, not best-effort. Once it has
+// succeeded, whatever session was just invalidated has its
+// push-notification device data cleaned up separately, in the background,
+// via the same best-effort cleanupSessionDevices mechanism Logout and
+// session replacement already use: notification-service being slow,
+// unreachable, or erroring must never turn an already-completed password
+// change into an error, and it never gates or delays this method
+// returning.
 func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, in ChangePasswordInput) error {
 	u, err := s.users.GetByID(ctx, userID)
 	if err != nil {
@@ -215,8 +265,12 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, in Chang
 		return fmt.Errorf("auth: revoke sessions after password change: %w", err)
 	}
 
-	if err := s.sessions.Deactivate(ctx, userID); err != nil {
+	previousSessionID, hadPrevious, err := s.sessions.DeactivateAndReturnPrevious(ctx, userID)
+	if err != nil {
 		return fmt.Errorf("auth: deactivate session after password change: %w", err)
+	}
+	if hadPrevious {
+		s.cleanupSessionDevices(userID, previousSessionID)
 	}
 
 	return nil
